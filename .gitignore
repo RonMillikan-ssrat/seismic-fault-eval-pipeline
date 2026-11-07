@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data and generated output (regenerate, don't commit)
+lake/
+*.sgy
+*.segy
+*.npz
+spark-warehouse/
+metastore_db/
+derby.log
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store

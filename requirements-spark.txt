@@ -1,0 +1,8 @@
+# Part A (PySpark lakehouse). PySpark 4.x needs Java 17 or 21:
+#   sudo apt install openjdk-21-jre-headless
+pyspark>=4.0,<5
+pandas>=2.2,<3        # PySpark 4.x warns that pandas 3 is not fully supported yet
+pyarrow>=15
+numpy>=1.26
+fsspec>=2024.2
+# gcsfs>=2024.2       # uncomment for gs:// paths
