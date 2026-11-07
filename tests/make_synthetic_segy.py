@@ -45,6 +45,9 @@ def main():
     ap.add_argument("--format", type=int, choices=[1, 5], default=1, help="1 = IBM, 5 = IEEE")
     ap.add_argument("--missing", type=float, default=0.05, help="fraction of positions dropped")
     ap.add_argument("--dead", type=int, default=10, help="number of all-zero traces")
+    ap.add_argument("--dups", type=int, default=0, help="number of duplicated traces")
+    ap.add_argument("--gain-patch", default="",
+                    help="il0,il1,xl0,xl1,factor: scale a block of traces (e.g. 120,129,400,419,3)")
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
 
@@ -66,8 +69,28 @@ def main():
         data += amp * ricker(t[None, :] - tt[:, None], 30.0)
     data += 0.05 * rng.standard_normal(data.shape)
     data *= 1000.0
+
+    # Optional gain patch: a block of traces scaled by a constant, like a gain or
+    # acquisition problem. Applied before the dead traces so those stay at zero.
+    patch = np.array([], dtype=np.int64)
+    if args.gain_patch:
+        pil0, pil1, pxl0, pxl1, factor = args.gain_patch.split(",")
+        in_patch = ((il >= int(pil0)) & (il <= int(pil1)) &
+                    (xl >= int(pxl0)) & (xl <= int(pxl1)))
+        data[in_patch] *= float(factor)
+        patch = np.flatnonzero(in_patch)
+
     dead = rng.choice(n, size=min(args.dead, n), replace=False)
     data[dead] = 0.0
+
+    # Optional duplicates: copies of existing traces appended at the end of the
+    # file, so each duplicate has a later trace sequence number than its original.
+    dup_src = np.array([], dtype=np.int64)
+    if args.dups:
+        dup_src = np.sort(rng.choice(n, size=args.dups, replace=False))
+        il, xl = np.concatenate([il, il[dup_src]]), np.concatenate([xl, xl[dup_src]])
+        data = np.concatenate([data, data[dup_src]])
+        n = il.size
     data = data.astype(np.float32)
 
     # ---- file header
@@ -113,10 +136,14 @@ def main():
             f.write(th[i].tobytes())
             f.write(body[i].tobytes())
 
-    np.savez(args.out + ".truth.npz", il=il, xl=xl, x=x, y=y, data=data, dead=dead)
-    print(f"wrote {args.out}: {n} traces of {il.size and (il1-il0+1)*(xl1-xl0+1)} positions "
-          f"({(il1-il0+1)*(xl1-xl0+1) - n} missing), {len(dead)} dead, ns={args.ns}, "
-          f"dt={args.dt_ms} ms, format={args.format}")
+    np.savez(args.out + ".truth.npz", il=il, xl=xl, x=x, y=y, data=data, dead=dead,
+             dup_src=dup_src, patch=patch, il_range=[il0, il1], xl_range=[xl0, xl1],
+             gain_patch=args.gain_patch)
+    n_grid = (il1 - il0 + 1) * (xl1 - xl0 + 1)
+    n_pos = n - len(dup_src)
+    print(f"wrote {args.out}: {n} traces at {n_pos} of {n_grid} positions "
+          f"({n_grid - n_pos} missing), {len(dead)} dead, {len(dup_src)} duplicates, "
+          f"{len(patch)} in gain patch, ns={args.ns}, dt={args.dt_ms} ms, format={args.format}")
 
 
 if __name__ == "__main__":

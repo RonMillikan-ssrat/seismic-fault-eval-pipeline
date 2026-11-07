@@ -13,7 +13,8 @@ Work in progress. The full README comes at the end of the build.
 |---|---|---|
 | A1 | `spark/segy_to_parquet.py`: byte-range SEG-Y reader (`mapInPandas`), IBM/IEEE floats | Working; tested on synthetic SEG-Y |
 | A2 | `spark/trace_attributes.py`: per-trace attributes; Python UDF vs Arrow UDF vs pandas UDF timing | Working; tested on synthetic SEG-Y |
-| A5 | QC SQL (missing positions, duplicates, dead traces, amplitude jumps) | Next |
+| A5 | `sql/01–08` + `spark/qc_sql.py`: missing positions, duplicates, dead traces, amplitude jumps, rolling RMS, crossline islands, percentiles, survey summary | Working; 8/8 checks against synthetic truth (`tests/check_qc.py`) |
+| A5b | Same queries in BigQuery | Next |
 
 ## Quick start (local, no cluster)
 
@@ -29,4 +30,12 @@ python tests/make_synthetic_segy.py /tmp/syn.sgy
 python spark/segy_to_parquet.py /tmp/syn.sgy --survey SYN --out /tmp/lake --master 'local[*]'
 python tests/check_roundtrip.py /tmp/syn.sgy.truth.npz /tmp/lake/traces/survey=SYN
 python spark/trace_attributes.py --root /tmp/lake --survey SYN --master 'local[*]'
+
+# QC SQL on a survey with known problems: gaps, dead traces, duplicates, a 3x gain patch
+python tests/make_synthetic_segy.py /tmp/qc.sgy --il 100,299 --xl 300,599 --ns 462 \
+    --dups 25 --gain-patch 150,169,400,439,3
+python spark/segy_to_parquet.py /tmp/qc.sgy --survey QC --out /tmp/lake --master 'local[*]'
+python spark/trace_attributes.py --root /tmp/lake --survey QC --master 'local[*]' --variants pandas --repeat 1
+python tests/check_qc.py /tmp/qc.sgy.truth.npz --root /tmp/lake --survey QC
+python spark/qc_sql.py --root /tmp/lake --survey QC --master 'local[*]' --explain 08
 ```
