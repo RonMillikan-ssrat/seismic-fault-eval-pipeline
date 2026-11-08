@@ -48,7 +48,10 @@ from dataclasses import dataclass
 import numpy as np
 from scipy import ndimage as ndi
 
-DEFAULT_THRESHOLDS = np.round(np.linspace(0.0, 1.0, 101), 10)
+# Steps of 0.01, plus 0.001 steps above 0.99: unthinned fault maps often reach their
+# best F1 at very high thresholds, where a 0.01 grid is too coarse.
+DEFAULT_THRESHOLDS = np.unique(np.round(np.concatenate(
+    [np.linspace(0.0, 1.0, 101), np.linspace(0.99, 1.0, 11)]), 10))
 
 
 # ------------------------------------------------------------------- helpers
@@ -80,6 +83,54 @@ def dilate(mask, radius):
 def label_region(label, radius):
     """Region where labels are trusted: within `radius` samples of a labeled fault."""
     return dilate(label, radius)
+
+
+# Neighbor offsets (row, col) along each quantized gradient direction.
+# Rows are axis 0 (time, down), cols are axis 1 (crossline, right);
+# the angle is atan2(d/drow, d/dcol) folded into [0, 180).
+_NMS_OFFSETS = [(0, 1),    # ~0 deg:   prob changes along cols -> compare left/right
+                (1, 1),    # ~45 deg
+                (1, 0),    # ~90 deg:  prob changes along rows -> compare up/down
+                (1, -1)]   # ~135 deg
+
+
+def thin_faults(prob, sigma=1.0):
+    """Thin fault-probability bands to ~1-pixel ridges by non-maximum suppression.
+
+    Per section:
+      1. Smooth with a Gaussian (sigma, in samples) so a flat-topped band gets a
+         single peak at its center.
+      2. Sobel gradients give the direction across the band (the direction the
+         probability changes fastest), quantized to 0, 45, 90 or 135 degrees.
+      3. Keep a pixel only if its smoothed value is a peak along that direction:
+         greater than the neighbor behind it and >= the neighbor ahead. The
+         asymmetric test keeps exactly one pixel where two neighbors tie.
+    Kept pixels keep their ORIGINAL probability; all others become 0. The result is
+    still a probability map, so curve_counts() sweeps thresholds on it as before.
+
+    Side effect: at the END of a band the probability changes fastest along the
+    band, so the comparison runs along it and the last ~2-3 pixels are dropped
+    (Canny edge thinning shortens line ends the same way). This costs a little
+    recall at fault tips.
+
+    Thinning is 2-D, in the plane of each section. True 3-D thinning would act
+    across the fault surface; per-section is consistent with per-inline scoring.
+    """
+    prob = np.asarray(prob, dtype=np.float32)
+    out = np.zeros_like(prob)
+    for s in range(prob.shape[0]):
+        p = ndi.gaussian_filter(prob[s], sigma) if sigma > 0 else prob[s]
+        g_row, g_col = ndi.sobel(p, axis=0), ndi.sobel(p, axis=1)
+        q = np.round(((np.degrees(np.arctan2(g_row, g_col)) + 180.0) % 180.0) / 45.0).astype(int) % 4
+        h, w = p.shape
+        pad = np.pad(p, 1, mode="constant", constant_values=-np.inf)
+        keep = np.zeros(p.shape, bool)
+        for k, (dr, dc) in enumerate(_NMS_OFFSETS):
+            ahead = pad[1 + dr:1 + dr + h, 1 + dc:1 + dc + w]
+            behind = pad[1 - dr:1 - dr + h, 1 - dc:1 - dc + w]
+            keep |= (q == k) & (p > behind) & (p >= ahead)
+        out[s] = np.where(keep, prob[s], 0.0)
+    return out
 
 
 def _count_ge(values, thresholds):

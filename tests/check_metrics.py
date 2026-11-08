@@ -143,5 +143,52 @@ w20 = np.subtract(*fm.block_bootstrap(c2, 50, block=20, n_boot=3000)["recall_ci"
 print(f"      recall CI width: block 1 = {w1:.4f}, block 20 = {w20:.4f}  (ratio {w20 / w1:.2f})")
 check("8c block-20 CI wider than single-section CI", 1.0, float(w20 > 1.3 * w1))
 
+# 9. thinning (non-maximum suppression)
+# 9a a vertical band 9 columns wide with a peaked profile -> only the center column survives
+prof = np.exp(-0.5 * ((np.arange(-4, 5)) / 2.0) ** 2)
+band = np.zeros((2, H, W))
+band[:, R0:R1, 56:65] = prof * 0.9
+th = fm.thin_faults(band)
+inner = th[:, R0 + 3:R1 - 3]                                    # away from the band's ends
+cols = np.unique(np.nonzero(inner > 0.5)[2])
+check("9a vertical band: surviving columns == [60]", 1.0, float(cols.tolist() == [60]))
+check("9a kept pixels keep the original probability", 0.9, float(inner[inner > 0.5].max()), tol=1e-6)
+
+# 9b a flat-topped band (all 0.9, 6 wide): ties must leave exactly one pixel per row
+flat = np.zeros((2, H, W))
+flat[:, R0:R1, 50:56] = 0.9
+th = fm.thin_faults(flat)
+per_row = (th[:, R0 + 3:R1 - 3] > 0.5).sum(axis=2)
+check("9b flat-topped band: pixels per row == 1", 1.0, float(np.all(per_row == 1)))
+
+# 9c a 45-degree band: still about one pixel per row after thinning
+yy, xx = np.mgrid[0:H, 0:W]
+dist45 = np.abs((xx - 20) - (yy - 10)) / np.sqrt(2)
+diag = np.where((dist45 <= 3) & (yy > 15) & (yy < 110), np.exp(-0.5 * (dist45 / 1.5) ** 2), 0.0)
+th = fm.thin_faults(np.stack([diag, diag]))
+per_row = (th[:, 25:100] > 0.3).sum(axis=2)
+check("9c 45-degree band: max pixels per row <= 2", 1.0, float(per_row.max() <= 2))
+check("9c 45-degree band: no row emptied", 1.0, float(per_row.min() >= 1))
+
+# 9d precision gain: label = one column, prediction = a 9-wide band centered on it.
+#    At t=0.1 all 9 band columns are predicted; at tol 2 only 5 are within 2 of the
+#    label -> precision 5/9. Thinned -> 1.0.
+#    Recall after thinning is a little below 1: at each END of a band the probability
+#    changes fastest along the band, so NMS compares up/down there and drops the last
+#    couple of pixels (Canny NMS shortens line ends the same way).
+lab9 = faults([60])
+band9 = np.zeros((S, H, W))
+band9[:, R0:R1, 56:65] = prof * 0.9
+p_raw = at(fm.curve_counts(band9, lab9, tol=2), 0.1)
+c_thin = fm.curve_counts(fm.thin_faults(band9), lab9, tol=2)
+p_thin = at(c_thin, 0.1)
+check("9d band, unthinned: precision at t=0.1 = 5/9", 5 / 9, p_raw[0])
+check("9d band, thinned: precision", 1.0, p_thin[0], tol=1e-9)
+i01 = int(np.argmin(np.abs(c_thin.thresholds - 0.1)))
+lost = int(c_thin.n_label.sum() - c_thin.tp_label[:, i01].sum())
+print(f"      thinned recall {p_thin[1]:.3f}: {lost / S:.1f} label pixels per section lost "
+      f"at the band ends ({L} per section in total)")
+check("9d band, thinned: recall >= 0.9 (only band ends lost)", 1.0, float(p_thin[1] >= 0.9))
+
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

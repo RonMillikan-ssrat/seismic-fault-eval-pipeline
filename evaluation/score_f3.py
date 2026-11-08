@@ -20,6 +20,10 @@ Precision is reported two ways, as in score_faults.py:
 Uncertainty: block bootstrap over contiguous blocks of labeled inlines. Picks are
 every 10th inline, so a block of 4 labeled inlines spans about 40 inlines.
 
+Thinning (--thin): FaultSeg3D predicts bands several samples wide, so most
+predicted pixels sit beside the fault even when the band is in the right place.
+Non-maximum suppression (fault_metrics.thin_faults) keeps the ridge of each band.
+
 Threshold: the best-F1 threshold on all inlines is optimistic, so it is also
 chosen on every other block of inlines and reported on the remaining blocks.
 """
@@ -66,13 +70,19 @@ def main():
     ap.add_argument("--compare", type=float, nargs="*",
                     default=[0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
                     help="thresholds for a table in score_faults.py's format")
+    ap.add_argument("--thin", action="store_true",
+                    help="thin probability bands to 1-pixel ridges (non-maximum suppression) first")
+    ap.add_argument("--thin-sigma", type=float, default=1.0, help="smoothing before thinning")
     ap.add_argument("--out", default=None, help="write metrics.json and pr_curve.csv here")
     args = ap.parse_args()
 
     P, label, valid, il, crop = load(args.labels_dir, args.pred_dir)
+    if args.thin:
+        P = fm.thin_faults(P, sigma=args.thin_sigma)
     corridor = valid & fm.label_region(label, args.region_radius)
     print(f"{len(il)} labeled inlines ({il[0]}..{il[-1]}), section {P.shape[1]} t x {P.shape[2]} xl, "
-          f"{int(label.sum())} fault px, tol {args.tol:g}, corridor {args.region_radius:g}")
+          f"{int(label.sum())} fault px, tol {args.tol:g}, corridor {args.region_radius:g}, "
+          f"thinning {'on (sigma ' + format(args.thin_sigma, 'g') + ')' if args.thin else 'off'}")
 
     c_all = fm.curve_counts(P, label, args.tol, region=valid)
     c_cor = fm.curve_counts(P, label, args.tol, region=corridor)
@@ -112,6 +122,7 @@ def main():
         out = pathlib.Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
         metrics = dict(n_inlines=len(il), inlines=il, tol=args.tol, region_radius=args.region_radius,
+                       thin=args.thin, thin_sigma=args.thin_sigma if args.thin else None,
                        ap_all=s_all["ap"], ap_corridor=s_cor["ap"], best_threshold=thr,
                        precision=b["precision"], recall=b["recall"], f1=b["f1"],
                        precision_ci=b["precision_ci"], recall_ci=b["recall_ci"], f1_ci=b["f1_ci"],
