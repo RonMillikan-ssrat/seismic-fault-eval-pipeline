@@ -1,0 +1,11 @@
+# Packages inside the pipeline container (see Dockerfile).
+# kfp is pinned to the version used to COMPILE the pipeline: the components run
+# KFP's executor from this image (install_kfp_package=False), so the two must match.
+numpy>=1.26
+scipy>=1.11
+pandas>=2.2,<3
+pyarrow>=15
+matplotlib>=3.8
+fsspec>=2024.2
+kfp==2.18.0
+google-cloud-aiplatform>=1.60

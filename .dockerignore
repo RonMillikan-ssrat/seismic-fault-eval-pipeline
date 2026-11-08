@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+**/__pycache__
+lake
+kfp_local_outputs
+*.sgy
+*.segy
+*.npy
+*.npz
+*.hdf5
+fault_eval_pipeline.yaml

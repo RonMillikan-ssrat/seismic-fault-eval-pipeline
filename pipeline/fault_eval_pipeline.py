@@ -41,12 +41,14 @@ import os
 from kfp import compiler, dsl
 from kfp.dsl import HTML, Artifact, Dataset, Input, Metrics, Model, Output
 
-# Container image for GEAP runs (built on Day 4 with the repo and its dependencies).
-# The local SubprocessRunner ignores it and uses the current Python environment.
+# Container image for GEAP runs (Dockerfile; built by gcp/setup_vertex.sh). The local
+# SubprocessRunner ignores it and uses the current Python environment.
+# install_kfp_package=False: the image already contains the pinned kfp, so steps
+# don't pip-install it at start-up (faster, and no network needed for it).
 IMAGE = os.environ.get("FAULT_EVAL_IMAGE", "python:3.12-slim")
 
 
-@dsl.component(base_image=IMAGE)
+@dsl.component(base_image=IMAGE, install_kfp_package=False)
 def faultseg_predictions(precomputed_dir: str, predictions: Output[Dataset]):
     """FaultSeg3D fault probabilities as a pipeline artifact.
 
@@ -67,7 +69,7 @@ def faultseg_predictions(precomputed_dir: str, predictions: Output[Dataset]):
                                  "source": precomputed_dir, "crop_lo": crop["lo"], "crop_hi": crop["hi"]})
 
 
-@dsl.component(base_image=IMAGE)
+@dsl.component(base_image=IMAGE, install_kfp_package=False)
 def coherence_baseline(repo_dir: str, lake: str, survey: str, labels_dir: str,
                        crop_from: Input[Dataset], baseline: Output[Dataset]):
     """1 - semblance on the SAME crop as the candidate model, read from the Parquet lake."""
@@ -85,7 +87,7 @@ def coherence_baseline(repo_dir: str, lake: str, survey: str, labels_dir: str,
                               "lake": lake, "survey": survey})
 
 
-@dsl.component(base_image=IMAGE)
+@dsl.component(base_image=IMAGE, install_kfp_package=False)
 def score(repo_dir: str, labels_dir: str, predictions: Input[Dataset], model_name: str,
           tol: float, tol_sweep: list, region_radius: float, n_boot: int,
           metrics: Output[Metrics], report: Output[HTML], scores: Output[Dataset]):
@@ -153,7 +155,7 @@ def score(repo_dir: str, labels_dir: str, predictions: Input[Dataset], model_nam
         f.write(html)
 
 
-@dsl.component(base_image=IMAGE)
+@dsl.component(base_image=IMAGE, install_kfp_package=False)
 def gate(repo_dir: str, labels_dir: str, candidate: Input[Dataset], reference: Input[Dataset],
          tol: float, tol_sweep: list, region_radius: float, min_diff: float, n_boot: int,
          metrics: Output[Metrics], decision: Output[Artifact]) -> bool:
@@ -189,16 +191,23 @@ def gate(repo_dir: str, labels_dir: str, candidate: Input[Dataset], reference: I
     return bool(g["passed"])
 
 
-@dsl.component(base_image=IMAGE)
-def register(weights_uri: str, candidate: Input[Dataset], candidate_scores: Input[Dataset],
+@dsl.component(base_image=IMAGE, install_kfp_package=False)
+def register(weights_uri: str, project: str, location: str, use_vertex: bool, serving_image: str,
+             candidate: Input[Dataset], candidate_scores: Input[Dataset],
              decision: Input[Artifact], model: Output[Model]):
-    """Record the approved model version: a model card with its metrics and gate result.
+    """Record the approved model version: weights + a model card with its metrics and gate result.
 
-    Locally this is a Model artifact in ML Metadata. On GEAP (Day 4) this step
-    uploads to the Model Registry instead, with the same card as metadata.
+    Locally (use_vertex=False) this is a Model artifact in ML Metadata.
+    On GEAP (use_vertex=True) it also uploads to the Vertex AI Model Registry:
+      * artifact_uri = this step's Model artifact folder on GCS (weights + card)
+      * if a model named faultseg3d-f3 already exists, the upload becomes a NEW
+        VERSION of it (parent_model), so the registry keeps the history
+      * serving_container_image_uri is required by the registry; the pipeline
+        image is used. Serving is not set up: this model is used in batch.
     """
     import json
     import os
+    import shutil
 
     m = json.load(open(os.path.join(candidate_scores.path, "metrics.json")))
     g = json.load(open(decision.path))
@@ -211,8 +220,30 @@ def register(weights_uri: str, candidate: Input[Dataset], candidate_scores: Inpu
     os.makedirs(model.path, exist_ok=True)
     with open(os.path.join(model.path, "model_card.json"), "w") as f:
         json.dump(card, f, indent=1)
+    if os.path.isfile(weights_uri):
+        shutil.copy(weights_uri, os.path.join(model.path, os.path.basename(weights_uri)))
     model.metadata.update({"weights_uri": weights_uri, "f1": m["f1"], "gate_diff_lo": g["diff_ci"][0],
                            "threshold": m["best_threshold"]})
+
+    if use_vertex:
+        from google.cloud import aiplatform
+        aiplatform.init(project=project, location=location)
+        existing = aiplatform.Model.list(filter='display_name="faultseg3d-f3"', order_by="create_time desc")
+        uploaded = aiplatform.Model.upload(
+            display_name="faultseg3d-f3",
+            parent_model=existing[0].resource_name if existing else None,
+            is_default_version=True,
+            artifact_uri=model.uri,
+            serving_container_image_uri=serving_image,
+            description="Pretrained FaultSeg3D (Wu et al. 2019), gated against a coherence baseline on F3.",
+            version_description=(f"F1 {m['f1']:.3f} [{m['f1_ci'][0]:.3f}, {m['f1_ci'][1]:.3f}] at tol "
+                                 f"{m['tol']:g}; beats coherence by {g['diff']:.3f} "
+                                 f"(CI low {g['diff_ci'][0]:.3f})"),
+            labels={"pipeline": "seismic-fault-eval", "gate": "passed"},
+        )
+        model.metadata.update({"resourceName": uploaded.resource_name,
+                               "version_id": uploaded.version_id})
+        print(f"registered {uploaded.resource_name} version {uploaded.version_id}")
 
 
 @dsl.pipeline(name="seismic-fault-eval",
@@ -220,21 +251,29 @@ def register(weights_uri: str, candidate: Input[Dataset], candidate_scores: Inpu
 def fault_eval_pipeline(repo_dir: str, lake: str, labels_dir: str, faultseg_pred_dir: str,
                         weights_uri: str, survey: str = "F3", tol: float = 3.0,
                         tol_sweep: list = [1.0, 2.0, 3.0, 5.0, 8.0], region_radius: float = 40.0,
-                        min_diff: float = 0.0, n_boot: int = 2000):
+                        min_diff: float = 0.0, n_boot: int = 2000, project: str = "",
+                        location: str = "us-central1", use_vertex: bool = False, serving_image: str = ""):
     pred = faultseg_predictions(precomputed_dir=faultseg_pred_dir).set_display_name("FaultSeg3D predictions")
     base = coherence_baseline(repo_dir=repo_dir, lake=lake, survey=survey, labels_dir=labels_dir,
                               crop_from=pred.outputs["predictions"]).set_display_name("coherence baseline")
+    # On Vertex, CPU/memory requests choose the machine for each step (ignored locally).
+    # Semblance on the F3 crop uses ~4 GB in float64; scoring holds two volumes.
+    base.set_cpu_limit("4").set_memory_limit("16G")
     s_model = score(repo_dir=repo_dir, labels_dir=labels_dir, predictions=pred.outputs["predictions"],
                     model_name="FaultSeg3D", tol=tol, tol_sweep=tol_sweep,
                     region_radius=region_radius, n_boot=n_boot).set_display_name("score FaultSeg3D")
-    score(repo_dir=repo_dir, labels_dir=labels_dir, predictions=base.outputs["baseline"],
+    s_model.set_cpu_limit("4").set_memory_limit("16G")
+    s_base = score(repo_dir=repo_dir, labels_dir=labels_dir, predictions=base.outputs["baseline"],
           model_name="coherence", tol=tol, tol_sweep=tol_sweep,
           region_radius=region_radius, n_boot=n_boot).set_display_name("score coherence")
+    s_base.set_cpu_limit("4").set_memory_limit("16G")
     g = gate(repo_dir=repo_dir, labels_dir=labels_dir, candidate=pred.outputs["predictions"],
              reference=base.outputs["baseline"], tol=tol, tol_sweep=tol_sweep,
              region_radius=region_radius, min_diff=min_diff, n_boot=n_boot).set_display_name("gate")
+    g.set_cpu_limit("4").set_memory_limit("16G")
     with dsl.If(g.outputs["Output"] == True):  # noqa: E712 (KFP builds the condition from ==, not "is")
-        register(weights_uri=weights_uri, candidate=pred.outputs["predictions"],
+        register(weights_uri=weights_uri, project=project, location=location, use_vertex=use_vertex,
+                 serving_image=serving_image, candidate=pred.outputs["predictions"],
                  candidate_scores=s_model.outputs["scores"],
                  decision=g.outputs["decision"]).set_display_name("register model")
 
