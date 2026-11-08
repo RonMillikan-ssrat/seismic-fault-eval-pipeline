@@ -11,14 +11,14 @@ Work in progress. The full README comes at the end of the build.
 
 | Part | Component | State |
 |---|---|---|
-| A1 | `spark/segy_to_parquet.py`: byte-range SEG-Y reader (`mapInPandas`), IBM/IEEE floats | Working; tested on synthetic SEG-Y |
+| A1 | `spark/segy_to_parquet.py`: byte-range SEG-Y reader (`mapInPandas`), IBM/IEEE floats | Working on F3: 600,515 traces, 18,586 missing positions (matches segyio), 1.26 GB in 33 s |
 | A2 | `spark/trace_attributes.py`: per-trace attributes; Python UDF vs Arrow UDF vs pandas UDF timing | Working; tested on synthetic SEG-Y |
 | A5 | `sql/01–08` + `spark/qc_sql.py`: missing positions, duplicates, dead traces, amplitude jumps, rolling RMS, crossline islands, percentiles, survey summary | Working; 8/8 checks against synthetic truth (`tests/check_qc.py`) |
 | A4 | `gcp/load_bq.sh`: lake → GCS → BigQuery (Hive partitioning, list inference, clustering by survey, il, xl) | Working on GCP (`us-central1`): 57,051 traces loaded, `samples` as REPEATED FLOAT64 |
 | B3 | `evaluation/fault_metrics.py`: tolerance P/R/F1 (distance transform + max filter), PR curve, AP, best-F1 threshold, Dice/IoU with dilation, label-region precision, block and paired bootstrap, NMS thinning | Working; 34/34 known-answer checks (`tests/check_metrics.py`) |
 | B3b | `evaluation/score_f3.py`: scores FaultSeg3D's `prob_crop.npy` on the labeled F3 inlines (all and corridor precision, AP, block-bootstrap CIs, held-out threshold) | Run on F3: matches `score_faults.py` at every threshold (see below). `--thin` added. |
-| B2 | `baseline/coherence.py`: 1 − semblance from the Parquet lake (pyarrow filter pushdown), same output layout as FaultSeg3D | Working; 16/16 checks incl. gate (`tests/check_baseline.py`); F3 run pending |
-| B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Working on synthetic; F3 run pending |
+| B2 | `baseline/coherence.py`: 1 − semblance from the Parquet lake (pyarrow filter pushdown), same output layout as FaultSeg3D | Working on F3: read 185,437 crop traces from the lake in 1.2 s; 16/16 checks (`tests/check_baseline.py`) |
+| B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Run on F3: **PASS** at tol 3 (see below) |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
@@ -59,6 +59,24 @@ Reading:
 - **Thinning cut predicted pixels 4.7×** but did not change F1 at practical tolerances; thinned F1 catches up by tolerance 5, so NMS is not breaking ridges. It costs a little F1 at tolerance 1–2, where the wide band covers a pick better than its center line does.
 - **AP is not comparable between unthinned and thinned** (0.111 vs 0.058, all-section): thinning caps recall near 0.61, so the curves span different recall ranges. Compare F1 at an operating point instead.
 - One tolerance hides all of this, so `score_f3.py --tol-sweep` reports F1 against tolerance.
+
+### Gate: FaultSeg3D vs. a coherence baseline
+
+Baseline: 1 − semblance (3 inlines × 3 crosslines × 9 samples, no dip steering), computed from the Parquet lake on the same crop.
+Each model's threshold is chosen on 21 calibration inlines; the paired block bootstrap (5,000 draws) uses the other 20.
+
+| Tolerance | FaultSeg3D F1 | Coherence F1 | F1 difference, 95% CI |
+|---|---|---|---|
+| 1 | 0.426 | 0.136 | 0.290 [0.168, 0.374] |
+| 2 | 0.510 | 0.175 | 0.335 [0.195, 0.432] |
+| 3 | 0.564 | 0.210 | 0.353 [0.213, 0.445] |
+| 5 | 0.640 | 0.276 | 0.363 [0.236, 0.454] |
+| 8 | 0.700 | 0.362 | 0.338 [0.228, 0.413] |
+
+**Gate at tolerance 3: PASS** (lower bound 0.213 > 0; no bootstrap draw had the baseline ahead).
+
+- Coherence's corridor precision stays near 0.12 at every threshold: it responds to dipping reflectors, noise and stratigraphic edges about as strongly as to faults (median attribute 0.24). FaultSeg3D's precision rises with threshold.
+- **This baseline is a floor, not a strong competitor.** Beating it shows the model is useful, not that it is good; the gate's other conditions (no drop versus the registered model, minimum recall) carry the rest. A dip-steered, tuned and thinned semblance would be a fairer baseline.
 
 ## Quick start (local, no cluster)
 
