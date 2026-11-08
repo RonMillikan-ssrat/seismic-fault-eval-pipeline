@@ -18,11 +18,19 @@ then discards the result, so the timing excludes output I/O.
 The sample interval dt comes from the surveys table through a broadcast join.
 """
 import argparse
+import os
+import sys
 import time
 
 import numpy as np
 import pandas as pd
 from pyspark.sql import SparkSession, functions as F, types as T
+
+# Spark workers must run the same Python as this script (the venv). Without this,
+# local mode looks for a default "python3"/"python" on PATH, which may not exist
+# or may lack the packages. Dataproc sets PYSPARK_PYTHON itself, so keep any value.
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 ATTR_FIELDS = ["rms", "mean", "std", "max_abs", "zero_frac", "n_nan",
                "dom_freq_hz", "spec_centroid_hz"]

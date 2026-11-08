@@ -14,12 +14,20 @@ Writes <root>/qc_summary/survey=<name>/: one row per query (row count, run time)
 which the monitoring step reads later.
 """
 import argparse
+import os
+import sys
 import re
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 from pyspark.sql import SparkSession, functions as F
+
+# Spark workers must run the same Python as this script (the venv). Without this,
+# local mode looks for a default "python3"/"python" on PATH, which may not exist
+# or may lack the packages. Dataproc sets PYSPARK_PYTHON itself, so keep any value.
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 SQL_DIR = Path(__file__).resolve().parent.parent / "sql"
 

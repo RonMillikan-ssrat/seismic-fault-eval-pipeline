@@ -36,6 +36,9 @@ spark = None
 if args.engine == "spark":
     if not args.root:
         ap.error("--root is required with --engine spark")
+    import os
+    os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+    os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
     from pyspark.sql import SparkSession
     sys.path.insert(0, str(REPO / "spark"))
     from qc_sql import register_views, run_query

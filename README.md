@@ -25,7 +25,6 @@ Work in progress. The full README comes at the end of the build.
 sudo apt install openjdk-21-jre-headless
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-spark.txt
-export PYSPARK_PYTHON=$(which python)
 
 # Self-test on a synthetic SEG-Y with known contents
 python tests/make_synthetic_segy.py /tmp/syn.sgy

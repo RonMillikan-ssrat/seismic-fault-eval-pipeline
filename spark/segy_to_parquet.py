@@ -18,6 +18,8 @@ Assumes fixed-length traces (true for nearly all post-stack volumes).
 Works on local paths and gs:// paths (gs:// needs `pip install gcsfs`).
 """
 import argparse
+import os
+import sys
 import json
 import struct
 import time
@@ -26,6 +28,12 @@ import fsspec
 import numpy as np
 import pandas as pd
 from pyspark.sql import SparkSession, functions as F, types as T
+
+# Spark workers must run the same Python as this script (the venv). Without this,
+# local mode looks for a default "python3"/"python" on PATH, which may not exist
+# or may lack the packages. Dataproc sets PYSPARK_PYTHON itself, so keep any value.
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
 
 # SEG-Y data sample format code -> (numpy kind, bytes per sample)
 FORMATS = {1: ("ibm", 4), 2: ("i4", 4), 3: ("i2", 2), 5: ("f4", 4), 8: ("i1", 1)}
