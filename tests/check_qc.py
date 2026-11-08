@@ -3,35 +3,58 @@
 
 Every expected answer is computed here in plain NumPy from the truth file,
 independently of the SQL, then compared with what the query returned.
+
+  --engine spark  runs sql/*.sql with Spark on the local lake (--root)
+  --engine bq     runs sql/bq/*.sql in BigQuery (--project, --dataset)
 """
 import argparse
 import sys
 from pathlib import Path
 
 import numpy as np
-from pyspark.sql import SparkSession
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "spark"))
-from qc_sql import register_views, run_query  # noqa: E402
+REPO = Path(__file__).resolve().parent.parent
 
 ap = argparse.ArgumentParser()
 ap.add_argument("truth")
-ap.add_argument("--root", required=True)
 ap.add_argument("--survey", required=True)
+ap.add_argument("--engine", choices=["spark", "bq"], default="spark")
+ap.add_argument("--root", help="lake root (spark engine)")
 ap.add_argument("--master", default="local[*]")
+ap.add_argument("--project", default=None, help="GCP project (bq engine)")
+ap.add_argument("--dataset", default="seismic")
+ap.add_argument("--location", default=None)
 args = ap.parse_args()
 
 tr = np.load(args.truth)
 il, xl, data = tr["il"], tr["xl"], tr["data"]
 il0, il1 = tr["il_range"]
 xl0, xl1 = tr["xl_range"]
-
-spark = (SparkSession.builder.master(args.master)
-         .config("spark.ui.showConsoleProgress", "false").getOrCreate())
-spark.sparkContext.setLogLevel("ERROR")
-register_views(spark, args.root.rstrip("/"))
 params = {"survey": args.survey, "jump": 2.0, "spike": 2.0, "xl_step": 1}
-q = lambda name: run_query(spark, name, params).toPandas()
+
+spark = None
+if args.engine == "spark":
+    if not args.root:
+        ap.error("--root is required with --engine spark")
+    from pyspark.sql import SparkSession
+    sys.path.insert(0, str(REPO / "spark"))
+    from qc_sql import register_views, run_query
+
+    spark = (SparkSession.builder.master(args.master)
+             .config("spark.ui.showConsoleProgress", "false").getOrCreate())
+    spark.sparkContext.setLogLevel("ERROR")
+    register_views(spark, args.root.rstrip("/"))
+    q = lambda name: run_query(spark, name, params).toPandas()
+else:
+    from google.cloud import bigquery
+    sys.path.insert(0, str(REPO / "gcp"))
+    from qc_bq import run_query_bq
+
+    client = bigquery.Client(project=args.project, location=args.location)
+    ds = f"{client.project}.{args.dataset}"
+    q = lambda name: run_query_bq(client, name, ds, params)[0]
+
+print(f"engine: {args.engine}")
 
 results = []
 
@@ -89,6 +112,7 @@ s = s[s.survey == args.survey]
 check("08 traces in stats == traces in file", int(s.n_traces_file.iloc[0]),
       int(s.n_traces_stats.iloc[0]))
 
-spark.stop()
+if spark is not None:
+    spark.stop()
 print(f"\n{sum(results)}/{len(results)} checks passed")
 sys.exit(0 if all(results) else 1)

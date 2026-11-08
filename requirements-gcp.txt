@@ -1,0 +1,3 @@
+# BigQuery client for gcp/qc_bq.py and tests/check_qc.py --engine bq.
+# The [pandas] extra adds db-dtypes and pyarrow, which .to_dataframe() needs.
+google-cloud-bigquery[pandas]>=3.25
