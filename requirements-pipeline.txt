@@ -1,0 +1,4 @@
+# Part B pipeline (pipeline/fault_eval_pipeline.py): KFP v2 SDK with kfp.local,
+# plus matplotlib for the HTML reports. Install with requirements-eval.txt.
+kfp>=2.14
+matplotlib>=3.8

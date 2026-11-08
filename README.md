@@ -19,6 +19,7 @@ Work in progress. The full README comes at the end of the build.
 | B3b | `evaluation/score_f3.py`: scores FaultSeg3D's `prob_crop.npy` on the labeled F3 inlines (all and corridor precision, AP, block-bootstrap CIs, held-out threshold) | Run on F3: matches `score_faults.py` at every threshold (see below). `--thin` added. |
 | B2 | `baseline/coherence.py`: 1 − semblance from the Parquet lake (pyarrow filter pushdown), same output layout as FaultSeg3D | Working on F3: read 185,437 crop traces from the lake in 1.2 s; 16/16 checks (`tests/check_baseline.py`) |
 | B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Run on F3: **PASS** at tol 3 (see below) |
+| B5 | `pipeline/fault_eval_pipeline.py`: KFP v2 pipeline (predictions → coherence baseline → score ×2 → gate → `dsl.If` → register) with Metrics, HTML reports and a model card; `kfp local` runner | Runs end to end locally on synthetic data, both gate branches checked; F3 run pending |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
@@ -119,4 +120,10 @@ python spark/segy_to_parquet.py $L/F3.sgy --survey F3 --out ~/lake --master 'loc
 python baseline/coherence.py --lake ~/lake --survey F3 --crop $L/pred/crop.json --meta $L/inlines/meta.json --out ~/f3_coherence
 python evaluation/score_f3.py --labels-dir $L/inlines --pred-dir ~/f3_coherence --tol 3 --tol-sweep 1 2 3 5 8
 python evaluation/compare_models.py --labels-dir $L/inlines --pred-a $L/pred --pred-b ~/f3_coherence --tol 3 --tol-sweep 1 2 3 5 8 --out ~/f3_gate
+
+# The same steps as a KFP pipeline, run locally (outputs under ~/kfp_local_outputs)
+pip install -r requirements-pipeline.txt
+python pipeline/fault_eval_pipeline.py local --repo-dir . --lake ~/lake --labels-dir $L/inlines \
+    --faultseg-pred-dir $L/pred --weights-uri $L/models/fseg-70.hdf5
+python pipeline/fault_eval_pipeline.py compile --out fault_eval_pipeline.yaml   # spec for GEAP
 ```
