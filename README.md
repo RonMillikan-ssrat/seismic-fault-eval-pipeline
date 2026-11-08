@@ -17,6 +17,8 @@ Work in progress. The full README comes at the end of the build.
 | A4 | `gcp/load_bq.sh`: lake → GCS → BigQuery (Hive partitioning, list inference, clustering by survey, il, xl) | Working on GCP (`us-central1`): 57,051 traces loaded, `samples` as REPEATED FLOAT64 |
 | B3 | `evaluation/fault_metrics.py`: tolerance P/R/F1 (distance transform + max filter), PR curve, AP, best-F1 threshold, Dice/IoU with dilation, label-region precision, block and paired bootstrap, NMS thinning | Working; 34/34 known-answer checks (`tests/check_metrics.py`) |
 | B3b | `evaluation/score_f3.py`: scores FaultSeg3D's `prob_crop.npy` on the labeled F3 inlines (all and corridor precision, AP, block-bootstrap CIs, held-out threshold) | Run on F3: matches `score_faults.py` at every threshold (see below). `--thin` added. |
+| B2 | `baseline/coherence.py`: 1 − semblance from the Parquet lake (pyarrow filter pushdown), same output layout as FaultSeg3D | Working; 16/16 checks incl. gate (`tests/check_baseline.py`); F3 run pending |
+| B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Working on synthetic; F3 run pending |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
@@ -42,6 +44,21 @@ Reading:
 - **The best threshold is 0.97** because FaultSeg3D predicts bands several samples wide; a high threshold keeps only the band center. Thinning (`--thin`) does that explicitly.
 - **Pixel Dice is half the tolerance-aware Dice** for the same prediction, so the metric definition has to be stated with any number.
 - The table matches the earlier `score_faults.py` in seismic-fault-labeling exactly, as an independent check of `fault_metrics.py` on real data.
+
+### Tolerance and thinning (same 41 inlines, corridor precision)
+
+| Tolerance (samples) | Best F1, unthinned | Best F1, thinned (NMS) |
+|---|---|---|
+| 1 | 0.411 | 0.362 |
+| 2 | 0.501 | 0.481 |
+| 3 | 0.567 | 0.559 |
+| 5 | 0.651 | 0.651 |
+| 8 | 0.715 | 0.717 |
+
+- **F1 rises steadily with tolerance, with no single jump**, which fits a spread of 1–8 sample offsets between the model's fault centers and the hand-drawn picks rather than one constant shift. Separating pick error from model error needs inter-interpreter agreement (e.g. CRACKS' multiple annotators).
+- **Thinning cut predicted pixels 4.7×** but did not change F1 at practical tolerances; thinned F1 catches up by tolerance 5, so NMS is not breaking ridges. It costs a little F1 at tolerance 1–2, where the wide band covers a pick better than its center line does.
+- **AP is not comparable between unthinned and thinned** (0.111 vs 0.058, all-section): thinning caps recall near 0.61, so the curves span different recall ranges. Compare F1 at an operating point instead.
+- One tolerance hides all of this, so `score_f3.py --tol-sweep` reports F1 against tolerance.
 
 ## Quick start (local, no cluster)
 
@@ -75,4 +92,13 @@ python tests/check_qc.py /tmp/qc.sgy.truth.npz --engine bq --survey QC
 pip install -r requirements-eval.txt
 python tests/check_metrics.py
 python evaluation/fault_metrics.py --prob prob.npy --label label.npy --tol 2 --block 10
+python tests/check_baseline.py
+
+# F3: lake -> coherence baseline -> score both -> gate
+# (F3 files come from seismic-fault-labeling: F3.sgy, inlines/, pred/)
+L=~/devl/seismic-fault-labeling
+python spark/segy_to_parquet.py $L/F3.sgy --survey F3 --out ~/lake --master 'local[*]' --driver-memory 16g
+python baseline/coherence.py --lake ~/lake --survey F3 --crop $L/pred/crop.json --meta $L/inlines/meta.json --out ~/f3_coherence
+python evaluation/score_f3.py --labels-dir $L/inlines --pred-dir ~/f3_coherence --tol 3 --tol-sweep 1 2 3 5 8
+python evaluation/compare_models.py --labels-dir $L/inlines --pred-a $L/pred --pred-b ~/f3_coherence --tol 3 --tol-sweep 1 2 3 5 8 --out ~/f3_gate
 ```
