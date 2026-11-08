@@ -48,6 +48,7 @@ python gcp/qc_bq.py --survey QC
 python tests/check_qc.py /tmp/qc.sgy.truth.npz --engine bq --survey QC
 
 # Fault metrics (no Spark needed)
+pip install -r requirements-eval.txt
 python tests/check_metrics.py
 python evaluation/fault_metrics.py --prob prob.npy --label label.npy --tol 2 --block 10
 ```

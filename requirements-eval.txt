@@ -1,0 +1,4 @@
+# Part B evaluation (evaluation/fault_metrics.py, tests/check_metrics.py).
+# SciPy provides the Euclidean distance transform, maximum filter and dilation.
+numpy>=1.26
+scipy>=1.11
