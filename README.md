@@ -15,6 +15,7 @@ Work in progress. The full README comes at the end of the build.
 | A2 | `spark/trace_attributes.py`: per-trace attributes; Python UDF vs Arrow UDF vs pandas UDF timing | Working; tested on synthetic SEG-Y |
 | A5 | `sql/01–08` + `spark/qc_sql.py`: missing positions, duplicates, dead traces, amplitude jumps, rolling RMS, crossline islands, percentiles, survey summary | Working; 8/8 checks against synthetic truth (`tests/check_qc.py`) |
 | A4 | `gcp/load_bq.sh`: lake → GCS → BigQuery (Hive partitioning, list inference, clustering by survey, il, xl) | Working on GCP (`us-central1`): 57,051 traces loaded, `samples` as REPEATED FLOAT64 |
+| B3 | `evaluation/fault_metrics.py`: tolerance P/R/F1 (distance transform + max filter), PR curve, AP, best-F1 threshold, Dice/IoU with dilation, label-region precision, block and paired bootstrap | Working; 26/26 known-answer checks (`tests/check_metrics.py`) |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Quick start (local, no cluster)
@@ -45,4 +46,8 @@ pip install -r requirements-gcp.txt
 bash gcp/load_bq.sh                       # LAKE=/tmp/lake by default
 python gcp/qc_bq.py --survey QC
 python tests/check_qc.py /tmp/qc.sgy.truth.npz --engine bq --survey QC
+
+# Fault metrics (no Spark needed)
+python tests/check_metrics.py
+python evaluation/fault_metrics.py --prob prob.npy --label label.npy --tol 2 --block 10
 ```
