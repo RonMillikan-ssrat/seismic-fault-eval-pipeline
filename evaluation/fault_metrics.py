@@ -154,6 +154,12 @@ class Counts:
     def n_sections(self):
         return self.n_label.shape[0]
 
+    def subset(self, sections):
+        """Counts for a subset of sections (e.g. the held-out test inlines)."""
+        sections = np.asarray(sections)
+        return Counts(self.thresholds, self.n_pred[sections], self.tp_pred[sections],
+                      self.tp_label[sections], self.n_label[sections], self.tol)
+
     def totals(self, sections=None):
         s = slice(None) if sections is None else sections
         return (self.n_pred[s].sum(axis=0), self.tp_pred[s].sum(axis=0),
@@ -223,6 +229,16 @@ def summarize(counts, sections=None):
 def pick_threshold(counts, sections):
     """Best-F1 threshold index chosen on `sections` only (e.g. a calibration set of inlines)."""
     return summarize(counts, sections)["best_index"]
+
+
+def alternate_blocks(n_sections, block):
+    """Split sections into calibration and test sets by alternating contiguous blocks
+    (blocks 0, 2, 4, ... calibrate; 1, 3, 5, ... test). Alternating keeps both sets
+    spread over the whole survey; contiguous blocks keep neighbors together."""
+    blocks = [np.arange(i, min(i + block, n_sections)) for i in range(0, n_sections, block)]
+    calib = np.concatenate(blocks[0::2])
+    test = np.concatenate(blocks[1::2]) if len(blocks) > 1 else calib
+    return calib, test
 
 
 # ----------------------------------------------------------- overlap scores

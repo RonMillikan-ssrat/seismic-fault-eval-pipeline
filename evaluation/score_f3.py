@@ -73,6 +73,8 @@ def main():
     ap.add_argument("--thin", action="store_true",
                     help="thin probability bands to 1-pixel ridges (non-maximum suppression) first")
     ap.add_argument("--thin-sigma", type=float, default=1.0, help="smoothing before thinning")
+    ap.add_argument("--tol-sweep", type=float, nargs="*", default=None,
+                    help="also report best F1 at each of these tolerances, e.g. 1 2 3 5 8")
     ap.add_argument("--out", default=None, help="write metrics.json and pr_curve.csv here")
     args = ap.parse_args()
 
@@ -96,9 +98,7 @@ def main():
               f"{s_cor['precision'][i]:15.3f} {int(c_all.n_pred[:, i].sum()):9d}")
 
     # Optimistic: threshold chosen on everything. Honest: chosen on alternate blocks.
-    blocks = [np.arange(i, min(i + args.block, len(il))) for i in range(0, len(il), args.block)]
-    calib = np.concatenate(blocks[0::2])
-    test = np.concatenate(blocks[1::2]) if len(blocks) > 1 else calib
+    calib, test = fm.alternate_blocks(len(il), args.block)
     i_cal = fm.pick_threshold(c_cor, calib)
     p_t, r_t, f_t = fm.prf(*[x[i_cal] if np.ndim(x) else x for x in c_cor.totals(test)])
 
@@ -118,6 +118,24 @@ def main():
     print(f"Dice/IoU in corridor at t={thr:.2f}: pixel {d_px[0]:.3f}/{d_px[1]:.3f}   "
           f"dilated {args.tol:g}: {d_tol[0]:.3f}/{d_tol[1]:.3f}")
 
+    # F1 against tolerance: one number at one tolerance hides how fast the score
+    # improves as matching gets looser (see the README's F3 results).
+    tol_curve = []
+    if args.tol_sweep:
+        print(f"\n{'tol':>5} {'best t':>7} {'F1':>6} {'95% CI':>17} {'P':>6} {'R':>6} {'held-out F1':>12}")
+        for tol in args.tol_sweep:
+            c = fm.curve_counts(P, label, tol, region=corridor)
+            sm = fm.summarize(c)
+            bb = fm.block_bootstrap(c, sm["best_index"], block=args.block, n_boot=args.n_boot)
+            ic = fm.pick_threshold(c, calib)
+            hf = fm.prf(*[x[ic] if np.ndim(x) else x for x in c.totals(test)])[2]
+            tol_curve.append(dict(tol=tol, best_threshold=sm["best_threshold"], f1=bb["f1"],
+                                  f1_ci=bb["f1_ci"], precision=bb["precision"], recall=bb["recall"],
+                                  heldout_f1=float(hf)))
+            print(f"{tol:5g} {sm['best_threshold']:7.3f} {bb['f1']:6.3f} "
+                  f"[{bb['f1_ci'][0]:.3f}, {bb['f1_ci'][1]:.3f}] {bb['precision']:6.3f} "
+                  f"{bb['recall']:6.3f} {hf:12.3f}")
+
     if args.out:
         out = pathlib.Path(args.out)
         out.mkdir(parents=True, exist_ok=True)
@@ -130,14 +148,21 @@ def main():
                        heldout_threshold=float(c_cor.thresholds[i_cal]),
                        heldout_precision=float(p_t), heldout_recall=float(r_t), heldout_f1=float(f_t),
                        dice_pixel=d_px[0], iou_pixel=d_px[1], dice_tol=d_tol[0], iou_tol=d_tol[1],
-                       crop=crop)
+                       tol_curve=tol_curve, crop=crop)
         (out / "metrics.json").write_text(json.dumps(metrics, indent=1))
         with open(out / "pr_curve.csv", "w") as f:
             f.write("threshold,recall,precision_all,precision_corridor,f1_corridor\n")
             for i, t in enumerate(c_all.thresholds):
                 f.write(f"{t:.2f},{s_all['recall'][i]:.6f},{s_all['precision'][i]:.6f},"
                         f"{s_cor['precision'][i]:.6f},{s_cor['f1'][i]:.6f}\n")
-        print(f"\nwrote {out / 'metrics.json'} and {out / 'pr_curve.csv'}")
+        if tol_curve:
+            with open(out / "tol_curve.csv", "w") as f:
+                f.write("tol,best_threshold,f1,f1_lo,f1_hi,precision,recall,heldout_f1\n")
+                for r in tol_curve:
+                    f.write(f"{r['tol']:g},{r['best_threshold']:.3f},{r['f1']:.6f},{r['f1_ci'][0]:.6f},"
+                            f"{r['f1_ci'][1]:.6f},{r['precision']:.6f},{r['recall']:.6f},"
+                            f"{r['heldout_f1']:.6f}\n")
+        print(f"\nwrote {out}/metrics.json, pr_curve.csv" + (", tol_curve.csv" if tol_curve else ""))
 
 
 if __name__ == "__main__":
