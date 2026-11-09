@@ -20,7 +20,7 @@ Work in progress. The full README comes at the end of the build.
 | B2 | `baseline/coherence.py`: 1 − semblance from the Parquet lake (pyarrow filter pushdown), same output layout as FaultSeg3D | Working on F3: read 185,437 crop traces from the lake in 1.2 s; 16/16 checks (`tests/check_baseline.py`) |
 | B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Run on F3: **PASS** at tol 3 (see below) |
 | B5 | `pipeline/fault_eval_pipeline.py`: KFP v2 pipeline (predictions → coherence baseline → score ×2 → gate → `dsl.If` → register) with Metrics, HTML reports and a model card; `kfp local` runner | Runs locally on F3: 6/6 steps in 90 s, gate PASS (lower bound 0.211), model card written; both gate branches tested on synthetic data |
-| B6 | GEAP: `Dockerfile`, `gcp/setup_vertex.sh` (Vertex API, Artifact Registry, least-privilege service account, Cloud Build, F3 data to GCS), `gcp/submit_pipeline.py`; `register` uploads to Vertex Model Registry as a new version | Written; first GEAP run pending |
+| B6 | GEAP: `Dockerfile`, `gcp/setup_vertex.sh` (Vertex API, Artifact Registry, least-privilege service account, Cloud Build, F3 data to GCS), `gcp/submit_pipeline.py`; `register` uploads to Vertex Model Registry as a new version | **Ran on GEAP (Vertex AI Pipelines), first submission: SUCCEEDED** (2026-11-08) |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
