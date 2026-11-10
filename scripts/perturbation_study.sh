@@ -41,6 +41,7 @@ if has infer; then
   for s in $SURVEYS; do
     out="$STUDY/$s/pred"
     if [[ -f "$out/prob_crop.npy" ]]; then echo "skip infer $s (exists)"; continue; fi
+    mkdir -p "$STUDY/$s"                     # tee opens the log before Python creates the folder
     extra=()
     [[ "$s" == "F3" ]] && extra=(--compare "$L/pred/prob_crop.npy")   # must reproduce the Oct 31 run
     echo "=== infer $s"
