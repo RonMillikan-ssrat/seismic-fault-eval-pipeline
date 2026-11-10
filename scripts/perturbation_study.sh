@@ -2,7 +2,7 @@
 # Perturbation study on F3: perturb the crop (Spark), run FaultSeg3D on each version,
 # score each against the picks, and collect a summary table.
 #
-#   STEPS="perturb infer score summary" (default; run a subset, e.g. STEPS="score summary")
+#   STEPS="perturb infer score summary attrs drift" (default; run a subset, e.g. STEPS="attrs drift")
 #   Inference skips surveys that already have prob_crop.npy, so the script can be
 #   stopped and restarted.
 #
@@ -21,7 +21,7 @@ LAKE=${LAKE:-$HOME/lake}
 STUDY=${STUDY:-$HOME/f3_study}
 PY=${PY:-$(command -v python)}
 TFPY=${TFPY:-$L/venv/bin/python}
-STEPS=${STEPS:-"perturb infer score summary"}
+STEPS=${STEPS:-"perturb infer score summary attrs drift"}
 CROP="$L/pred/crop.json"
 META="$L/inlines/meta.json"
 SURVEYS=${SURVEYS:-"F3 F3-noise-0.25 F3-noise-0.5 F3-noise-1 F3-lowpass-40 F3-lowpass-25 F3-lowpass-15 F3-gain-4 F3-tgain-1 F3-tgain-2"}
@@ -78,4 +78,19 @@ for s in surveys:
 (study / "summary.csv").write_text("\n".join(rows) + "\n")
 print(f"wrote {study / 'summary.csv'}")
 EOF
+fi
+
+if has attrs; then
+  # Per-trace attributes (RMS, spectral centroid, ...) for each survey -> trace_stats
+  for s in $SURVEYS; do
+    echo "=== attributes $s"
+    "$PY" "$HERE/spark/trace_attributes.py" --root "$LAKE" --survey "$s" --master 'local[*]' \
+        --driver-memory 16g --variants pandas --repeat 1 2>&1 | grep -E "^pandas|^wrote"
+  done
+fi
+
+if has drift; then
+  # Label-free drift signals vs true F1 -> drift_table.csv, drift_vs_f1.png
+  "$PY" "$HERE/monitoring/drift_signals.py" --root "$LAKE" --study "$STUDY" --reference F3 \
+      --crop "$CROP" --meta "$META" --driver-memory 16g
 fi

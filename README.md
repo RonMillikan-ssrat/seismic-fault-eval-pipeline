@@ -22,6 +22,7 @@ Work in progress. The full README comes at the end of the build.
 | B5 | `pipeline/fault_eval_pipeline.py`: KFP v2 pipeline (predictions → coherence baseline → score ×2 → gate → `dsl.If` → register) with Metrics, HTML reports and a model card; `kfp local` runner | Runs locally on F3: 6/6 steps in 90 s, gate PASS (lower bound 0.211), model card written; both gate branches tested on synthetic data |
 | B6 | GEAP: `Dockerfile`, `gcp/setup_vertex.sh` (Vertex API, Artifact Registry, least-privilege service account, Cloud Build, F3 data to GCS), `gcp/submit_pipeline.py`; `register` uploads to Vertex Model Registry as a new version | **Ran on GEAP (Vertex AI Pipelines), first submission: SUCCEEDED** (2026-11-08) |
 | A3 / B7 | `spark/perturb.py` (noise, low-pass, gain, time-varying gain → new lake surveys; pandas UDF, higher-order `aggregate`), `infer/faultseg_from_lake.py` (FaultSeg3D on any lake survey), `scripts/perturbation_study.sh` | Perturbations: 10/10 known-answer checks (`tests/check_perturb.py`); F3 study pending |
+| B8 | `monitoring/drift_signals.py` + `sql/drift/`: label-free input signals (raw and normalized RMS PSI in Spark SQL, spectral shifts) and output signals (mean probability, entropy, fragmentation); Spearman vs the F1 drop; figure | 14/14 known-answer checks (`tests/check_drift.py`); F3 study pending |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
@@ -86,7 +87,7 @@ Each model's threshold is chosen on 21 calibration inlines; the paired block boo
 ```bash
 # PySpark 4 needs Java 17 or 21
 sudo apt install openjdk-21-jre-headless
-python3 -m venv .venv && source .venv/bin/activate
+python3 -m venv venv && source venv/bin/activate
 pip install -r requirements-spark.txt
 
 # Self-test on a synthetic SEG-Y with known contents
