@@ -73,6 +73,18 @@ def load_cube(lake_root, survey, il_range, xl_range, t_range=None):
                       duplicates=int(tbl.num_rows - n_pos))
 
 
+def crop_ranges(crop, meta):
+    """Crop index box (crop.json lo/hi into the label volume) -> inline, crossline and
+    sample ranges, each [first, last + 1). Assumes inline step 1 (true for F3)."""
+    lo, hi = crop["lo"], crop["hi"]
+    il_numbers = meta["il_numbers"]
+    il_range = (int(il_numbers[lo[0]]), int(il_numbers[hi[0] - 1]) + 1)
+    xl_range = (int(meta["xl_first"]) + lo[1], int(meta["xl_first"]) + hi[1])
+    if il_range[1] - il_range[0] != hi[0] - lo[0]:
+        raise SystemExit("inline numbers in the crop are not consecutive; this loader assumes step 1")
+    return il_range, xl_range, (lo[2], hi[2])
+
+
 def semblance(cube, n_il=3, n_xl=3, half_t=4):
     """Semblance of an (il, xl, t) cube over an n_il x n_xl x (2*half_t + 1) window."""
     a = np.asarray(cube, np.float64)
@@ -107,13 +119,8 @@ def main():
     crop = json.loads(pathlib.Path(args.crop).read_text())
     meta = json.loads(pathlib.Path(args.meta).read_text())
     lo, hi = crop["lo"], crop["hi"]
-    il_numbers = meta["il_numbers"]
-    il_range = (int(il_numbers[lo[0]]), int(il_numbers[hi[0] - 1]) + 1)
-    xl_range = (int(meta["xl_first"]) + lo[1], int(meta["xl_first"]) + hi[1])
-    if il_range[1] - il_range[0] != hi[0] - lo[0]:
-        raise SystemExit("inline numbers in the crop are not consecutive; this loader assumes step 1")
-
-    cube, info = load_cube(args.lake, args.survey, il_range, xl_range, (lo[2], hi[2]))
+    il_range, xl_range, t_range = crop_ranges(crop, meta)
+    cube, info = load_cube(args.lake, args.survey, il_range, xl_range, t_range)
     print(f"read il {il_range[0]}-{il_range[1] - 1}, xl {xl_range[0]}-{xl_range[1] - 1}, "
           f"t {lo[2]}-{hi[2] - 1} -> cube {cube.shape} ({cube.nbytes / 1e6:.0f} MB); {info}  "
           f"[{time.time() - t0:.1f} s]")
