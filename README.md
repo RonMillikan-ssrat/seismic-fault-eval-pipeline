@@ -1,32 +1,65 @@
 # seismic-fault-eval-pipeline
 
-Evaluation and monitoring pipeline for seismic fault-detection models, on GCP GEAP (Gemini Enterprise Agent Platform, formerly Vertex AI) Pipelines with Kubeflow (KFP v2).
+Evaluates and monitors a seismic fault-detection model: a PySpark and SQL data layer, tolerance-based evaluation with confidence intervals, a gated Kubeflow pipeline on GCP GEAP (Gemini Enterprise Agent Platform, formerly Vertex AI), and label-free drift monitoring calibrated against measured accuracy loss.
 
-- **Part A, seismic trace lakehouse (PySpark + SQL):** SEG-Y to Parquet with one row per trace, per-trace attributes, geometry/amplitude QC in SQL, drift statistics in BigQuery.
-- **Part B, fault-model evaluation (KFP):** pretrained FaultSeg3D inference, a coherence baseline, tolerance-based metrics with bootstrap confidence intervals, a gated registration step and label-free drift monitoring.
+The model is the pretrained FaultSeg3D (Wu et al., 2019), run unchanged. The data is the public F3 survey (Netherlands), scored against one interpreter's picks of one fault on 41 inlines. The project measures and monitors a model; it does not train one.
 
-Work in progress. The full README comes at the end of the build.
+## Main results
 
-## Status
+| Question | Answer |
+|---|---|
+| How good is FaultSeg3D on F3 against the picks? | F1 0.567, 95% CI [0.457, 0.652], at a 3-sample tolerance; 0.564 with the threshold chosen on separate inlines |
+| Does it beat a classical baseline? | Yes: +0.353 F1 [0.213, 0.445] over semblance coherence on held-out inlines (paired block bootstrap). The baseline is a floor, not a strong competitor. |
+| Does input drift mean accuracy loss? | No. A ×4 gain change maxes out amplitude PSI and changes F1 by nothing; normalized PSI then misses noise, which cost the most. |
+| What does track accuracy loss, without labels? | The model's own output. Under noise it predicts up to 58% fewer fault voxels and F1 at the deployed threshold falls from 0.567 to 0.085, in the same order. |
+| Does the tooling hold up on real data? | The Spark SEG-Y reader matches segyio on 600,515 traces; the metrics match an independent scoring script at every threshold; lake-based inference reproduces the SEG-Y run bit for bit. |
 
-| Part | Component | State |
+## Architecture
+
+```mermaid
+flowchart LR
+  segy[F3 SEG-Y] --> reader[Spark reader<br/>mapInPandas byte ranges]
+  reader --> lake[(Parquet lake<br/>traces, trace_stats, surveys)]
+  lake --> qc[QC SQL<br/>Spark SQL and BigQuery]
+  lake --> coh[Coherence baseline]
+  lake --> perturb[Perturbations<br/>noise, low-pass, gain]
+  perturb --> lake
+  lake --> fs[FaultSeg3D inference]
+  fs --> score[Score and gate<br/>tolerance F1, paired bootstrap]
+  coh --> score
+  score -->|gate passes| reg[Model Registry]
+  fs --> drift[Drift signals vs true F1]
+  lake --> drift
+  drift --> thr[Calibrated thresholds]
+  thr --> mon[Monitoring step<br/>OK / WARN / ALERT]
+```
+
+## Where each part runs
+
+| Part | Local | GCP |
 |---|---|---|
-| A1 | `spark/segy_to_parquet.py`: byte-range SEG-Y reader (`mapInPandas`), IBM/IEEE floats | Working on F3: 600,515 traces, 18,586 missing positions (matches segyio), 1.26 GB in 33 s |
-| A2 | `spark/trace_attributes.py`: per-trace attributes; Python UDF vs Arrow UDF vs pandas UDF timing | Working; tested on synthetic SEG-Y |
-| A5 | `sql/01–08` + `spark/qc_sql.py`: missing positions, duplicates, dead traces, amplitude jumps, rolling RMS, crossline islands, percentiles, survey summary | Working; 8/8 checks against synthetic truth (`tests/check_qc.py`) |
-| A4 | `gcp/load_bq.sh`: lake → GCS → BigQuery (Hive partitioning, list inference, clustering by survey, il, xl) | Working on GCP (`us-central1`): 57,051 traces loaded, `samples` as REPEATED FLOAT64 |
-| B3 | `evaluation/fault_metrics.py`: tolerance P/R/F1 (distance transform + max filter), PR curve, AP, best-F1 threshold, Dice/IoU with dilation, label-region precision, block and paired bootstrap, NMS thinning | Working; 34/34 known-answer checks (`tests/check_metrics.py`) |
-| B3b | `evaluation/score_f3.py`: scores FaultSeg3D's `prob_crop.npy` on the labeled F3 inlines (all and corridor precision, AP, block-bootstrap CIs, held-out threshold) | Run on F3: matches `score_faults.py` at every threshold (see below). `--thin` added. |
-| B2 | `baseline/coherence.py`: 1 − semblance from the Parquet lake (pyarrow filter pushdown), same output layout as FaultSeg3D | Working on F3: read 185,437 crop traces from the lake in 1.2 s; 16/16 checks (`tests/check_baseline.py`) |
-| B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Run on F3: **PASS** at tol 3 (see below) |
-| B5 | `pipeline/fault_eval_pipeline.py`: KFP v2 pipeline (predictions → coherence baseline → score ×2 → gate → `dsl.If` → register) with Metrics, HTML reports and a model card; `kfp local` runner | Runs locally on F3: 6/6 steps in 90 s, gate PASS (lower bound 0.211), model card written; both gate branches tested on synthetic data |
-| B6 | GEAP: `Dockerfile`, `gcp/setup_vertex.sh` (Vertex API, Artifact Registry, least-privilege service account, Cloud Build, F3 data to GCS), `gcp/submit_pipeline.py`; `register` uploads to Vertex Model Registry as a new version | **Ran on GEAP (Vertex AI Pipelines), first submission: SUCCEEDED** (2026-11-08) |
-| A3 / B7 | `spark/perturb.py` (noise, low-pass, gain, time-varying gain → new lake surveys; pandas UDF, higher-order `aggregate`), `infer/faultseg_from_lake.py` (FaultSeg3D on any lake survey), `scripts/perturbation_study.sh` | Run on F3 (9 perturbed copies). Lake-based inference reproduces the SEG-Y run bit for bit. 10/10 checks (`tests/check_perturb.py`) |
-| B8 | `monitoring/drift_signals.py` + `sql/drift/`: label-free input signals (raw and normalized RMS PSI in Spark SQL, spectral shifts) and output signals (mean probability, entropy, fragmentation); Spearman vs the F1 drop; figure | Run on F3 (see below); 14/14 checks (`tests/check_drift.py`) |
-| B9 | `monitoring/monitor_batch.py`: `calibrate` (thresholds from the study's drift table, by the gap between harmed and unharmed surveys) and `check` (label-free OK / WARN / ALERT for a new batch, plus inlines for interpreter spot checks); `pipeline/monitor_pipeline.py` (KFP, local) | 16/16 known-answer checks (`tests/check_monitor.py`); pipeline runs with `kfp local`. For GEAP the step takes its input signals from BigQuery (`sql/drift/bq/`, `gcp/setup_monitor.sh`, `gcp/submit_monitor.py` with an optional capped schedule): **ran on GEAP 2026-11-11: SUCCEEDED.** The BigQuery engine reproduces the Spark result on F3 noise 0.5 (fraction −39.3%, centroid +9.78 Hz, ALERT; raw PSI 4.58 vs 4.57). |
-| A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
+| SEG-Y reader, attributes, perturbations (PySpark) | Yes | Not yet: written to read `gs://` paths, not run on Dataproc |
+| QC SQL | Spark SQL | BigQuery, run from a client |
+| Evaluation pipeline: baseline, scoring, gate, register | `kfp local` | **Vertex AI Pipelines, succeeded 2026-11-08**; model registered |
+| FaultSeg3D inference | Yes (CPU) | Not yet: the pipeline step stages precomputed predictions |
+| Drift study | Yes | Not planned: a one-off experiment |
+| Monitoring step | Spark SQL engine, `kfp local` | **Vertex AI Pipelines, succeeded 2026-11-11**, with input signals from BigQuery; schedules supported with a run cap |
 
-## Results so far: pretrained FaultSeg3D on F3
+## Components
+
+| Area | Files | Verified by |
+|---|---|---|
+| SEG-Y → Parquet | `spark/segy_to_parquet.py` | F3: 600,515 traces, 18,586 missing positions, matching segyio; round-trip tests on synthetic IBM and IEEE files |
+| Per-trace attributes, UDF timing | `spark/trace_attributes.py` | Python UDF 4.62 s, Arrow UDF 3.91 s, pandas UDF 0.90 s on 57,026 traces, identical results |
+| QC SQL, two dialects | `sql/01–08`, `sql/bq/01–08`, `spark/qc_sql.py`, `gcp/qc_bq.py`, `gcp/load_bq.sh` | 8/8 planted-problem checks in Spark SQL and in BigQuery (`tests/check_qc.py`) |
+| Metrics | `evaluation/fault_metrics.py`, `evaluation/score_f3.py` | 34/34 known-answer checks; matches `score_faults.py` on F3 |
+| Baseline and gate | `baseline/coherence.py`, `evaluation/compare_models.py` | 16/16 checks, including exact semblance values and both gate outcomes |
+| Evaluation pipeline | `pipeline/fault_eval_pipeline.py`, `Dockerfile`, `gcp/setup_vertex.sh`, `gcp/submit_pipeline.py` | 6/6 steps locally and on Vertex; gate-fail branch tested |
+| Perturbations and inference from the lake | `spark/perturb.py`, `infer/faultseg_from_lake.py`, `scripts/perturbation_study.sh`, `scripts/fetch_f3_from_gcs.sh` | 10/10 checks; exact reproduction of the original predictions |
+| Drift signals | `monitoring/drift_signals.py`, `sql/drift/`, `sql/drift/bq/` | 14/14 checks; on F3 noise 0.5 the BigQuery SQL gives raw PSI 4.58 against 4.57 from Spark SQL, and the same centroid shift (+9.8 Hz) |
+| Monitoring | `monitoring/monitor_batch.py`, `monitoring/thresholds_f3.json`, `pipeline/monitor_pipeline.py`, `gcp/setup_monitor.sh`, `gcp/submit_monitor.py` | 16/16 checks; same status from the Spark and BigQuery engines; ran on Vertex |
+
+## Results: pretrained FaultSeg3D on F3
 
 Scored against one interpreted fault (`fault_0`) picked on 41 inlines (every 10th, 100–500).
 Tolerance 3 samples; corridor = within 40 samples of a pick. No thinning.
@@ -125,6 +158,24 @@ Findings:
 `check` on three study surveys: gain ×4 → OK (raw PSI 8.28 shown as context), noise 0.5 → ALERT on both rules (−39.3%, +9.8 Hz), low-pass 40 Hz → OK. These are the surveys the thresholds came from, so this shows the tool reports what the study found; it is not an independent validation.
 
 Limits: 10 surveys, so the correlations are rough rankings (two surveys have zero drop and zero output shift, which lifts every output signal). Drops under about 0.1 are inside the bootstrap intervals. The perturbations keep the geology fixed; on a new area the fraction of predicted faults also changes for geological reasons, so the reference for that signal has to come from comparable data. The relation between predicted fraction and F1 was read from this table after the fact, not predicted. Output signals computed on every 4th inline differed from the whole crop (predicted fraction about 14% higher, fragmentation changes several times smaller); the cause has not been investigated, and all figures here use every inline.
+
+## Limits and what is not done
+
+- **Labels**: one interpreter, one fault, picked quickly. Whole-section precision is a coverage number; the corridor figures are the meaningful ones. A careful re-pick with every fault labeled on a few inlines is the next step, and would also allow calibration (ECE) to be measured.
+- **Sample size**: 41 labeled inlines give intervals of about ±0.1 F1, and the drift study has 10 surveys.
+- **Baseline**: semblance without dip steering, untuned.
+- **Gate**: the checks against the currently registered model and a minimum recall are designed, not built.
+- **Monitoring thresholds** come from one survey and synthetic perturbations with the geology held fixed, and have not been tested on a perturbation outside the calibration set.
+- **Open question**: output signals computed on every 4th inline differed from the whole crop; not yet explained.
+- **Not on GCP**: the Spark jobs (Dataproc) and FaultSeg3D inference as a pipeline step.
+- **Scale**: F3 fits on one machine. Spark is used for the pattern, not out of need.
+- **Tolerance** is in samples, treating one time sample and one trace as the same distance.
+
+## References
+
+- Wu, X., Liang, L., Shi, Y., Fomel, S. (2019). FaultSeg3D: using synthetic data sets to train an end-to-end convolutional neural network for 3D seismic fault segmentation. *Geophysics*.
+- A large-scale benchmark on geological fault delineation models, arXiv 2505.08585.
+- F3 Demo survey, provided by dGB Earth Sciences through the OpendTect Open Seismic Repository.
 
 ## Quick start (local, no cluster)
 
