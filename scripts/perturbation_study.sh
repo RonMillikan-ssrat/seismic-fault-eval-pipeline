@@ -22,6 +22,7 @@ STUDY=${STUDY:-$HOME/f3_study}
 PY=${PY:-$(command -v python)}
 TFPY=${TFPY:-$L/venv/bin/python}
 STEPS=${STEPS:-"perturb infer score summary attrs drift"}
+DRIVER_MEM=${DRIVER_MEM:-16g}          # Spark driver memory; use 6g on a 16 GB machine
 CROP="$L/pred/crop.json"
 META="$L/inlines/meta.json"
 SURVEYS=${SURVEYS:-"F3 F3-noise-0.25 F3-noise-0.5 F3-noise-1 F3-lowpass-40 F3-lowpass-25 F3-lowpass-15 F3-gain-4 F3-tgain-1 F3-tgain-2"}
@@ -33,7 +34,7 @@ if has perturb; then
     set -- $spec
     kind=$1; shift
     "$PY" "$HERE/spark/perturb.py" --root "$LAKE" --survey F3 --kind "$kind" --levels "$@" \
-        --crop "$CROP" --meta "$META" --master 'local[*]' --driver-memory 16g
+        --crop "$CROP" --meta "$META" --master 'local[*]' --driver-memory "$DRIVER_MEM"
   done
 fi
 
@@ -85,12 +86,12 @@ if has attrs; then
   for s in $SURVEYS; do
     echo "=== attributes $s"
     "$PY" "$HERE/spark/trace_attributes.py" --root "$LAKE" --survey "$s" --master 'local[*]' \
-        --driver-memory 16g --variants pandas --repeat 1 2>&1 | grep -E "^pandas|^wrote"
+        --driver-memory "$DRIVER_MEM" --variants pandas --repeat 1 2>&1 | grep -E "^pandas|^wrote"
   done
 fi
 
 if has drift; then
   # Label-free drift signals vs true F1 -> drift_table.csv, drift_vs_f1.png
   "$PY" "$HERE/monitoring/drift_signals.py" --root "$LAKE" --study "$STUDY" --reference F3 \
-      --crop "$CROP" --meta "$META" --driver-memory 16g
+      --crop "$CROP" --meta "$META" --driver-memory "$DRIVER_MEM"
 fi
