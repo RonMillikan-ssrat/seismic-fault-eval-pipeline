@@ -23,6 +23,7 @@ Work in progress. The full README comes at the end of the build.
 | B6 | GEAP: `Dockerfile`, `gcp/setup_vertex.sh` (Vertex API, Artifact Registry, least-privilege service account, Cloud Build, F3 data to GCS), `gcp/submit_pipeline.py`; `register` uploads to Vertex Model Registry as a new version | **Ran on GEAP (Vertex AI Pipelines), first submission: SUCCEEDED** (2026-11-08) |
 | A3 / B7 | `spark/perturb.py` (noise, low-pass, gain, time-varying gain → new lake surveys; pandas UDF, higher-order `aggregate`), `infer/faultseg_from_lake.py` (FaultSeg3D on any lake survey), `scripts/perturbation_study.sh` | Run on F3 (9 perturbed copies). Lake-based inference reproduces the SEG-Y run bit for bit. 10/10 checks (`tests/check_perturb.py`) |
 | B8 | `monitoring/drift_signals.py` + `sql/drift/`: label-free input signals (raw and normalized RMS PSI in Spark SQL, spectral shifts) and output signals (mean probability, entropy, fragmentation); Spearman vs the F1 drop; figure | Run on F3 (see below); 14/14 checks (`tests/check_drift.py`) |
+| B9 | `monitoring/monitor_batch.py`: `calibrate` (thresholds from the study's drift table, by the gap between harmed and unharmed surveys) and `check` (label-free OK / WARN / ALERT for a new batch, plus inlines for interpreter spot checks); `pipeline/monitor_pipeline.py` (KFP, local) | 16/16 known-answer checks (`tests/check_monitor.py`); pipeline runs with `kfp local`. Not yet on GEAP: the step needs Spark, which the image lacks. |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
@@ -162,6 +163,13 @@ python pipeline/fault_eval_pipeline.py compile --out fault_eval_pipeline.yaml   
 # Drift study (needs a TensorFlow venv in the labeling repo; DRIVER_MEM=6g on a 16 GB machine)
 #   on a second machine, first: bash scripts/fetch_f3_from_gcs.sh
 bash scripts/perturbation_study.sh
+
+# Monitoring: thresholds from the study, then a label-free check of one batch
+python monitoring/monitor_batch.py calibrate --drift-table ~/f3_study/drift_table.csv --out monitoring/thresholds_f3.json
+L=~/devl/seismic-fault-labeling
+python monitoring/monitor_batch.py check --root ~/lake --reference F3 --survey F3-noise-0.5 \
+    --pred-dir ~/f3_study/F3-noise-0.5/pred --ref-pred-dir ~/f3_study/F3/pred \
+    --thresholds monitoring/thresholds_f3.json --crop $L/pred/crop.json --meta $L/inlines/meta.json
 
 # On GEAP (Vertex AI Pipelines): one-time setup, then submit
 pip install google-cloud-aiplatform
