@@ -21,8 +21,8 @@ Work in progress. The full README comes at the end of the build.
 | B4 | `evaluation/compare_models.py`: gate = paired block bootstrap of F1(model) − F1(baseline) on held-out inlines | Run on F3: **PASS** at tol 3 (see below) |
 | B5 | `pipeline/fault_eval_pipeline.py`: KFP v2 pipeline (predictions → coherence baseline → score ×2 → gate → `dsl.If` → register) with Metrics, HTML reports and a model card; `kfp local` runner | Runs locally on F3: 6/6 steps in 90 s, gate PASS (lower bound 0.211), model card written; both gate branches tested on synthetic data |
 | B6 | GEAP: `Dockerfile`, `gcp/setup_vertex.sh` (Vertex API, Artifact Registry, least-privilege service account, Cloud Build, F3 data to GCS), `gcp/submit_pipeline.py`; `register` uploads to Vertex Model Registry as a new version | **Ran on GEAP (Vertex AI Pipelines), first submission: SUCCEEDED** (2026-11-08) |
-| A3 / B7 | `spark/perturb.py` (noise, low-pass, gain, time-varying gain → new lake surveys; pandas UDF, higher-order `aggregate`), `infer/faultseg_from_lake.py` (FaultSeg3D on any lake survey), `scripts/perturbation_study.sh` | Perturbations: 10/10 known-answer checks (`tests/check_perturb.py`); F3 study pending |
-| B8 | `monitoring/drift_signals.py` + `sql/drift/`: label-free input signals (raw and normalized RMS PSI in Spark SQL, spectral shifts) and output signals (mean probability, entropy, fragmentation); Spearman vs the F1 drop; figure | 14/14 known-answer checks (`tests/check_drift.py`); F3 study pending |
+| A3 / B7 | `spark/perturb.py` (noise, low-pass, gain, time-varying gain → new lake surveys; pandas UDF, higher-order `aggregate`), `infer/faultseg_from_lake.py` (FaultSeg3D on any lake survey), `scripts/perturbation_study.sh` | Run on F3 (9 perturbed copies). Lake-based inference reproduces the SEG-Y run bit for bit. 10/10 checks (`tests/check_perturb.py`) |
+| B8 | `monitoring/drift_signals.py` + `sql/drift/`: label-free input signals (raw and normalized RMS PSI in Spark SQL, spectral shifts) and output signals (mean probability, entropy, fragmentation); Spearman vs the F1 drop; figure | Run on F3 (see below); 14/14 checks (`tests/check_drift.py`) |
 | A5b | `sql/bq/01–08` + `gcp/qc_bq.py`: same QC checks in BigQuery SQL, with dry-run byte estimates | Working; 8/8 truth checks on BigQuery; header-only queries scan 1.1–2.1 MB of a ~210 MB table |
 
 ## Results so far: pretrained FaultSeg3D on F3
@@ -82,6 +82,35 @@ Each model's threshold is chosen on 21 calibration inlines; the paired block boo
 - Coherence's corridor precision stays near 0.12 at every threshold: it responds to dipping reflectors, noise and stratigraphic edges about as strongly as to faults (median attribute 0.24). FaultSeg3D's precision rises with threshold.
 - **This baseline is a floor, not a strong competitor.** Beating it shows the model is useful, not that it is good; the gate's other conditions (no drop versus the registered model, minimum recall) carry the rest. A dip-steered, tuned and thinned semblance would be a fairer baseline.
 
+### Drift study: which label-free signals track the F1 drop
+
+Nine perturbed copies of the F3 crop, each run through FaultSeg3D and scored against the same picks (tolerance 3, corridor).
+"F1 at 0.97" keeps the threshold chosen on clean F3, as a deployed model would; "best F1" re-chooses it per survey.
+
+| Perturbation | Best F1 | F1 at 0.97 | Recall at 0.97 | Fraction of voxels > 0.5 | Spectral centroid shift | RMS PSI raw / normalized |
+|---|---|---|---|---|---|---|
+| None (F3) | 0.567 | 0.567 | 0.573 | 0.0343 | 0 | 0 / 0 |
+| Gain ×4 | 0.567 | 0.567 | 0.573 | 0.0343 | 0 | 8.28 / 0.00 |
+| Noise 0.25 × RMS | 0.505 | 0.487 | 0.423 | 0.0286 | +5.4 Hz | 0.35 / 0.00 |
+| Noise 0.5 × RMS | 0.350 | 0.251 | 0.177 | 0.0208 | +9.8 Hz | 4.57 / 0.02 |
+| Noise 1 × RMS | 0.220 | 0.085 | 0.050 | 0.0144 | +15.0 Hz | 8.28 / 0.13 |
+| Low-pass 40 Hz | 0.567 | 0.567 | 0.585 | 0.0402 | −16.3 Hz | 8.04 / 0.27 |
+| Low-pass 25 Hz | 0.521 | 0.521 | 0.559 | 0.0463 | −22.0 Hz | 8.28 / 0.66 |
+| Low-pass 15 Hz | 0.482 | 0.481 | 0.549 | 0.0582 | −23.8 Hz | 8.28 / 1.19 |
+| Time gain t¹ | 0.550 | 0.545 | 0.523 | 0.0315 | −2.7 Hz | 5.88 / 0.52 |
+| Time gain t² | 0.487 | 0.465 | 0.402 | 0.0261 | −4.1 Hz | 8.28 / 0.99 |
+
+Spearman correlation of each signal's size with the F1 drop at 0.97 (10 surveys): mean probability and fraction > 0.5 **+0.78**, entropy +0.74, fragmentation +0.60, centroid +0.47, normalized RMS PSI +0.41, dominant frequency +0.30, raw RMS PSI +0.25.
+
+Findings:
+- **Gain is a pure false alarm for input monitoring.** Raw RMS PSI hits its ceiling (8.28) and F1 is identical to four decimals, because the model normalizes each crop.
+- **Normalizing the RMS statistic fixes the gain false alarm but misses noise**, the most damaging change (0.00–0.13), because white noise raises every trace's RMS in the same proportion. It also flags low-pass 40 Hz (0.27), which cost nothing.
+- **Under noise the model goes quiet.** At the deployed threshold recall falls 0.57 → 0.05 while precision falls more slowly. Best-threshold F1 hides part of this: the best threshold moved from 0.97 to 0.01.
+- **The model's own output is the best monitor.** When the fraction of voxels above 0.5 fell (noise, time gain), F1 fell in the same order: −8% → 0.02, −17% → 0.08, −24% → 0.10, −39% → 0.32, −58% → 0.48. When it rose (low-pass), F1 fell much less.
+- **Direction matters for spectral shift**: a centroid rise tracked harm; a much larger fall mostly did not.
+
+Limits: 10 surveys, so the correlations are rough rankings (two surveys have zero drop and zero output shift, which lifts every output signal). Drops under about 0.1 are inside the bootstrap intervals. The perturbations keep the geology fixed; on a new area the fraction of predicted faults also changes for geological reasons, so the reference for that signal has to come from comparable data. The relation between predicted fraction and F1 was read from this table after the fact, not predicted.
+
 ## Quick start (local, no cluster)
 
 ```bash
@@ -129,6 +158,10 @@ pip install -r requirements-pipeline.txt
 python pipeline/fault_eval_pipeline.py local --repo-dir . --lake ~/lake --labels-dir $L/inlines \
     --faultseg-pred-dir $L/pred --weights-uri $L/models/fseg-70.hdf5
 python pipeline/fault_eval_pipeline.py compile --out fault_eval_pipeline.yaml   # spec for GEAP
+
+# Drift study (needs a TensorFlow venv in the labeling repo; DRIVER_MEM=6g on a 16 GB machine)
+#   on a second machine, first: bash scripts/fetch_f3_from_gcs.sh
+bash scripts/perturbation_study.sh
 
 # On GEAP (Vertex AI Pipelines): one-time setup, then submit
 pip install google-cloud-aiplatform
