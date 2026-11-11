@@ -9,3 +9,4 @@ matplotlib>=3.8
 fsspec>=2024.2
 kfp==2.18.0
 google-cloud-aiplatform>=1.60
+google-cloud-bigquery[pandas]>=3.25   # monitoring step: input signals from BigQuery

@@ -14,11 +14,9 @@ Run locally:
       --thresholds monitoring/thresholds_f3.json \
       --crop ~/devl/seismic-fault-labeling/pred/crop.json --meta ~/devl/seismic-fault-labeling/inlines/meta.json
 
-Not yet runnable on GEAP: the input signals use Spark SQL, and the step image
-(Dockerfile) has no Java or PySpark. Two ways to get there: add them to the image,
-or compute the PSI and spectral medians with the BigQuery versions of sql/drift/
-and pass the results in. Once it runs there, a recurring run is one call:
-PipelineJob.create_schedule(cron=...).
+On GEAP (gcp/setup_monitor.sh, then gcp/submit_monitor.py) the step uses
+engine="bq": the input signals come from BigQuery (sql/drift/bq/), so the step
+image needs no Spark or Java. Locally the default engine is Spark SQL on the lake.
 """
 import argparse
 import os
@@ -32,6 +30,7 @@ IMAGE = os.environ.get("FAULT_EVAL_IMAGE", "python:3.12-slim")
 @dsl.component(base_image=IMAGE, install_kfp_package=False)
 def monitor(repo_dir: str, lake: str, reference: str, survey: str, pred_dir: str, ref_pred_dir: str,
             thresholds: str, crop: str, meta: str, spot_check: int,
+            engine: str, bq_table: str, project: str, location: str,
             metrics: Output[Metrics], report: Output[Artifact]) -> str:
     """Label-free drift check. Returns OK, WARN or ALERT."""
     import json
@@ -42,8 +41,10 @@ def monitor(repo_dir: str, lake: str, reference: str, survey: str, pred_dir: str
     import tempfile
 
     out = tempfile.mkdtemp()
-    cmd = [sys.executable, os.path.join(repo_dir, "monitoring", "monitor_batch.py"), "check",
-           "--root", lake, "--reference", reference, "--survey", survey,
+    where = (["--engine", "bq", "--bq-table", bq_table, "--project", project, "--location", location]
+             if engine == "bq" else ["--engine", "spark", "--root", lake])
+    cmd = [sys.executable, os.path.join(repo_dir, "monitoring", "monitor_batch.py"), "check", *where,
+           "--reference", reference, "--survey", survey,
            "--pred-dir", pred_dir, "--ref-pred-dir", ref_pred_dir, "--thresholds", thresholds,
            "--crop", crop, "--meta", meta, "--spot-check", str(spot_check), "--out", out]
     r = subprocess.run(cmd, capture_output=True, text=True)
@@ -57,7 +58,8 @@ def monitor(repo_dir: str, lake: str, reference: str, survey: str, pred_dir: str
     for k, v in rep["values"].items():
         metrics.log_metric(k, round(float(v), 4))
     metrics.log_metric("status_level", {"OK": 0, "WARN": 1, "ALERT": 2}[rep["status"]])
-    metrics.metadata.update({"survey": survey, "reference": reference, "status": rep["status"]})
+    metrics.metadata.update({"survey": survey, "reference": reference, "status": rep["status"],
+                             "engine": engine})
     report.metadata.update({"status": rep["status"], "spot_check": rep["spot_check"]})
     return rep["status"]
 
@@ -65,10 +67,14 @@ def monitor(repo_dir: str, lake: str, reference: str, survey: str, pred_dir: str
 @dsl.pipeline(name="seismic-fault-monitor",
               description="Label-free drift check of a new batch against the reference survey.")
 def monitor_pipeline(repo_dir: str, lake: str, survey: str, pred_dir: str, ref_pred_dir: str,
-                     thresholds: str, crop: str, meta: str, reference: str = "F3", spot_check: int = 5):
-    monitor(repo_dir=repo_dir, lake=lake, reference=reference, survey=survey, pred_dir=pred_dir,
-            ref_pred_dir=ref_pred_dir, thresholds=thresholds, crop=crop, meta=meta,
-            spot_check=spot_check).set_display_name("drift check")
+                     thresholds: str, crop: str, meta: str, reference: str = "F3", spot_check: int = 5,
+                     engine: str = "spark", bq_table: str = "", project: str = "",
+                     location: str = "us-central1"):
+    m = monitor(repo_dir=repo_dir, lake=lake, reference=reference, survey=survey, pred_dir=pred_dir,
+                ref_pred_dir=ref_pred_dir, thresholds=thresholds, crop=crop, meta=meta,
+                spot_check=spot_check, engine=engine, bq_table=bq_table, project=project,
+                location=location).set_display_name("drift check")
+    m.set_cpu_limit("4").set_memory_limit("16G")     # two probability volumes in memory
 
 
 def main():

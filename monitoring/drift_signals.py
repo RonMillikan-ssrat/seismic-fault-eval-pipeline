@@ -61,13 +61,41 @@ def input_signals(root, reference, bounds, master="local[*]", driver_memory="8g"
     spec = spark.sql((SQL_DIR / "02_spectral.sql").read_text(),
                      args={k: v for k, v in params.items() if k != "reference"}).toPandas()
     spark.stop()
-    df = psi.merge(spec, on="survey", how="outer")
+    return _shifts(psi.merge(spec, on="survey", how="outer"), reference)
+
+
+def _shifts(df, reference):
     ref = df[df.survey == reference]
     if ref.empty:
         raise SystemExit(f"reference survey {reference} has no trace_stats inside the crop")
     for col, src in [("d_centroid_hz", "centroid_med_hz"), ("d_domfreq_hz", "domfreq_med_hz")]:
         df[col] = df[src] - float(ref[src].iloc[0])
     return df
+
+
+def input_signals_bq(table, reference, bounds, project=None, location=None):
+    """Same signals as input_signals(), computed in BigQuery from a trace_stats table
+    (sql/drift/bq/). No Spark or Java needed, so this is what runs in a pipeline step."""
+    import re
+    from google.cloud import bigquery
+    if not re.match(r"^[a-z][a-z0-9-]{4,28}[a-z0-9]\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$", table):
+        raise ValueError(f"not a valid project.dataset.table: {table!r}")
+    client = bigquery.Client(project=project, location=location)
+    (il0, il1), (xl0, xl1) = bounds
+    ints = [bigquery.ScalarQueryParameter(k, "INT64", int(v))
+            for k, v in (("il0", il0), ("il1", il1), ("xl0", xl0), ("xl1", xl1))]
+    ref_p = [bigquery.ScalarQueryParameter("reference", "STRING", reference)]
+
+    def run(name, params):
+        text = (SQL_DIR / "bq" / name).read_text().replace("{table}", table)
+        job = client.query(text, job_config=bigquery.QueryJobConfig(query_parameters=params))
+        df = job.result().to_dataframe()
+        print(f"BigQuery {name}: {len(df)} rows, {(job.total_bytes_processed or 0) / 1e6:.1f} MB scanned")
+        return df
+
+    psi = run("01_psi_rms.sql", ints + ref_p)
+    spec = run("02_spectral.sql", ints)
+    return _shifts(psi.merge(spec, on="survey", how="outer"), reference)
 
 
 # ----------------------------------------------------------------- output

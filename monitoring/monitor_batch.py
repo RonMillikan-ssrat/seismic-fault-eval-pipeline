@@ -154,10 +154,14 @@ def check(args):
     else:
         bounds = (tuple(args.il_range), tuple(args.xl_range))
 
-    inp = ds.input_signals(args.root, args.reference, bounds, args.master, args.driver_memory)
+    if args.engine == "bq":
+        inp = ds.input_signals_bq(args.bq_table, args.reference, bounds, args.project, args.location)
+    else:
+        inp = ds.input_signals(args.root, args.reference, bounds, args.master, args.driver_memory)
     row = inp[inp.survey == args.survey]
     if row.empty:
-        raise SystemExit(f"{args.survey} has no trace_stats inside the crop: run spark/trace_attributes.py")
+        raise SystemExit(f"{args.survey} has no trace_stats inside the crop: run spark/trace_attributes.py"
+                         + (" and gcp/setup_monitor.sh" if args.engine == "bq" else ""))
     values = {k: float(row[k].iloc[0]) for k in ("psi_rms_raw", "psi_rms_norm", "d_centroid_hz")}
 
     new = np.load(pathlib.Path(args.pred_dir) / "prob_crop.npy", mmap_mode="r")
@@ -181,7 +185,7 @@ def check(args):
         print(f"spot checks for an interpreter: highest entropy {[name(i) for i in top]}, "
               f"random {[name(i) for i in rnd]}")
 
-    report = dict(survey=args.survey, reference=args.reference, status=status, signals=rows,
+    report = dict(survey=args.survey, reference=args.reference, status=status, engine=args.engine, signals=rows,
                   values=values, predicted_fraction=dict(new=o_new["frac_pos"], reference=o_ref["frac_pos"]),
                   spot_check=dict(highest_entropy=[name(i) for i in top], random=[name(i) for i in rnd]))
     if args.out:
@@ -203,7 +207,12 @@ def main():
     c.add_argument("--out", required=True, help="thresholds JSON to write")
 
     k = sub.add_parser("check", help="score a new batch against the thresholds")
-    k.add_argument("--root", required=True, help="lake root (trace_stats for both surveys)")
+    k.add_argument("--engine", choices=["spark", "bq"], default="spark",
+                   help="where the input signals are computed: Spark SQL on the lake, or BigQuery")
+    k.add_argument("--root", help="lake root with trace_stats for both surveys (spark engine)")
+    k.add_argument("--bq-table", help="project.dataset.table holding trace_stats (bq engine)")
+    k.add_argument("--project", default=None)
+    k.add_argument("--location", default=None)
     k.add_argument("--reference", default="F3")
     k.add_argument("--survey", required=True)
     k.add_argument("--pred-dir", required=True, help="new batch's prob_crop.npy folder")
@@ -235,6 +244,10 @@ def main():
         return
     if not (args.crop and args.meta) and not (args.il_range and args.xl_range):
         ap.error("check needs --crop and --meta, or --il-range and --xl-range")
+    if args.engine == "spark" and not args.root:
+        ap.error("--root is required with --engine spark")
+    if args.engine == "bq" and not args.bq_table:
+        ap.error("--bq-table is required with --engine bq")
     check(args)
 
 
