@@ -103,6 +103,8 @@ def analyze(study, inputs, reference):
     df = summ.merge(inputs, on="survey", how="left").merge(out, on="survey", how="left")
     f1_ref = float(df.loc[df.survey == reference, "f1"].iloc[0])
     df["f1_drop"] = f1_ref - df.f1
+    if "f1_fixed" in df.columns:        # F1 at the reference survey's threshold (deployed setting)
+        df["f1_fixed_drop"] = float(df.loc[df.survey == reference, "f1_fixed"].iloc[0]) - df.f1_fixed
     return df
 
 
@@ -115,15 +117,24 @@ def spearman(x, y):
 
 
 def report(df, study):
-    print(f"\n{'survey':16s} {'F1':>6} {'drop':>6} " + " ".join(f"{s:>13s}" for s in SIGNALS))
+    fixed = "f1_fixed" in df.columns
+    ycol = "f1_fixed" if fixed else "f1"
+    head = f"{'survey':16s} {'F1':>6} {'drop':>6} " + (f"{'F1@ref t':>8} {'drop':>6} " if fixed else "")
+    print("\n" + head + " ".join(f"{s:>13s}" for s in SIGNALS))
     for _, r in df.iterrows():
-        print(f"{r.survey:16s} {r.f1:6.3f} {r.f1_drop:6.3f} " + " ".join(f"{r[s]:13.4f}" for s in SIGNALS))
+        mid = f"{r.f1_fixed:8.3f} {r.f1_fixed_drop:6.3f} " if fixed else ""
+        print(f"{r.survey:16s} {r.f1:6.3f} {r.f1_drop:6.3f} " + mid + " ".join(f"{r[s]:13.4f}" for s in SIGNALS))
 
+    # Signals are signed (a centroid can move up or down); the correlation uses their
+    # size. With ~10 surveys these are rough rankings, not precise estimates.
     print(f"\nSpearman rank correlation of |signal| with the F1 drop ({len(df)} surveys):")
+    print(f"  {'signal':14s} {'best-threshold F1':>18}" + (f" {'F1 at reference threshold':>26}" if fixed else ""))
     rho = {}
     for s in SIGNALS:
-        rho[s] = spearman(np.abs(df[s].to_numpy(float)), df.f1_drop.to_numpy(float))
-        print(f"  {s:14s} {rho[s]:+.2f}")
+        x = np.abs(df[s].to_numpy(float))
+        best = spearman(x, df.f1_drop.to_numpy(float))
+        rho[s] = spearman(x, df.f1_fixed_drop.to_numpy(float)) if fixed else best
+        print(f"  {s:14s} {best:+18.2f}" + (f" {rho[s]:+26.2f}" if fixed else ""))
 
     import matplotlib
     matplotlib.use("Agg")
@@ -136,13 +147,14 @@ def report(df, study):
         for k in colors:
             m = kinds == k
             if m.any():
-                ax.scatter(df.loc[m, s], df.loc[m, "f1"], c=colors[k], label=k, s=40)
+                ax.scatter(df.loc[m, s], df.loc[m, ycol], c=colors[k], label=k, s=40)
         for _, r in df.iterrows():
-            ax.annotate(str(r.level) if r.kind != "none" else "ref", (r[s], r.f1), fontsize=7,
+            ax.annotate(str(r.level) if r.kind != "none" else "ref", (r[s], r[ycol]), fontsize=7,
                         xytext=(3, 3), textcoords="offset points")
         ax.set(title=f"{s}  (rho {rho[s]:+.2f})", xlabel=s)
         ax.grid(alpha=0.3)
-    axes[0, 0].set_ylabel("true F1 (tol 3)"); axes[1, 0].set_ylabel("true F1 (tol 3)")
+    ylab = "true F1 at the reference threshold" if fixed else "true F1 (best threshold)"
+    axes[0, 0].set_ylabel(ylab); axes[1, 0].set_ylabel(ylab)
     axes[0, 0].legend(fontsize=8)
     fig.suptitle("Label-free drift signals vs. true F1 on perturbed F3")
     fig.tight_layout()

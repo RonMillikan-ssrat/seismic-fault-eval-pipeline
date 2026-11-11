@@ -62,20 +62,31 @@ if has score; then
 fi
 
 if has summary; then
+  # f1       = best F1 with the threshold re-chosen on each survey (an upper bound).
+  # f1_fixed = F1 at the threshold chosen on unperturbed F3: what a deployed model,
+  #            whose threshold was set once, would score on the drifted data.
   "$PY" - "$STUDY" $SURVEYS <<'EOF'
-import json, sys, pathlib
+import csv, json, sys, pathlib
 study, surveys = pathlib.Path(sys.argv[1]), sys.argv[2:]
-rows = ["survey,kind,level,f1,f1_lo,f1_hi,heldout_f1,precision,recall,best_threshold,f1_tol1,f1_tol8"]
-print(f"{'survey':16s} {'F1':>6} {'95% CI':>16} {'held-out':>9} {'P':>6} {'R':>6} {'t':>6}")
+ref_t = json.loads((study / surveys[0] / "score" / "metrics.json").read_text())["best_threshold"]
+def fixed(s):
+    rows = list(csv.DictReader(open(study / s / "score" / "pr_curve.csv")))
+    r = min(rows, key=lambda r: abs(float(r["threshold"]) - ref_t))
+    return float(r["f1_corridor"]), float(r["precision_corridor"]), float(r["recall"])
+rows = ["survey,kind,level,f1,f1_lo,f1_hi,heldout_f1,precision,recall,best_threshold,f1_tol1,f1_tol8,"
+        "f1_fixed,precision_fixed,recall_fixed,fixed_threshold"]
+print(f"{'survey':16s} {'best F1':>7} {'95% CI':>16} {'best t':>6} | at t={ref_t:.2f}: {'F1':>6} {'P':>6} {'R':>6}")
 for s in surveys:
     m = json.loads((study / s / "score" / "metrics.json").read_text())
     kind, level = (s.split("-")[1], s.split("-")[2]) if "-" in s else ("none", "0")
     tc = {r["tol"]: r["f1"] for r in m["tol_curve"]}
+    ff, pf, rf = fixed(s)
     rows.append(f"{s},{kind},{level},{m['f1']:.4f},{m['f1_ci'][0]:.4f},{m['f1_ci'][1]:.4f},"
                 f"{m['heldout_f1']:.4f},{m['precision']:.4f},{m['recall']:.4f},{m['best_threshold']:.3f},"
-                f"{tc.get(1.0, float('nan')):.4f},{tc.get(8.0, float('nan')):.4f}")
-    print(f"{s:16s} {m['f1']:6.3f} [{m['f1_ci'][0]:.3f}, {m['f1_ci'][1]:.3f}] {m['heldout_f1']:9.3f} "
-          f"{m['precision']:6.3f} {m['recall']:6.3f} {m['best_threshold']:6.3f}")
+                f"{tc.get(1.0, float('nan')):.4f},{tc.get(8.0, float('nan')):.4f},"
+                f"{ff:.4f},{pf:.4f},{rf:.4f},{ref_t:.3f}")
+    print(f"{s:16s} {m['f1']:7.3f} [{m['f1_ci'][0]:.3f}, {m['f1_ci'][1]:.3f}] {m['best_threshold']:6.3f} | "
+          f"{'':11s}{ff:6.3f} {pf:6.3f} {rf:6.3f}")
 (study / "summary.csv").write_text("\n".join(rows) + "\n")
 print(f"wrote {study / 'summary.csv'}")
 EOF
