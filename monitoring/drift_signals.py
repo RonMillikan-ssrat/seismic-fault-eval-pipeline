@@ -71,8 +71,10 @@ def input_signals(root, reference, bounds, master="local[*]", driver_memory="8g"
 
 
 # ----------------------------------------------------------------- output
-def output_signals(prob, threshold=0.5, step=4):
-    """Signals from a probability volume (il, xl, t), using every `step`-th inline."""
+def output_signals(prob, threshold=0.5, step=1):
+    """Signals from a probability volume (il, xl, t), using every `step`-th inline.
+    All inlines by default: on F3 every 4th inline gave a predicted fraction about
+    14% higher than the whole crop, enough to shift a threshold."""
     p = np.asarray(prob[::step], dtype=np.float32)
     pc = np.clip(p, 1e-7, 1 - 1e-7)
     entropy = -(pc * np.log(pc) + (1 - pc) * np.log1p(-pc))

@@ -126,15 +126,18 @@ def evaluate(values, thresholds):
     return rows, overall
 
 
-def spot_check(prob, k, seed=0):
-    """Inline indices for interpreter review: k highest mean entropy + k random others."""
-    ent = np.empty(prob.shape[0])
-    for i in range(prob.shape[0]):
+def spot_check(prob, k, seed=0, margin=0):
+    """Inline indices for interpreter review: k highest mean entropy + k random others.
+    `margin` inlines at each end of the crop are skipped: on F3 the first and last
+    few inlines had the highest entropy on every survey, clean F3 included, which
+    points to the edge of the predicted volume rather than to the data."""
+    ent = np.full(prob.shape[0], -np.inf)
+    for i in range(margin, prob.shape[0] - margin):
         p = np.clip(np.asarray(prob[i], dtype=np.float32), 1e-7, 1 - 1e-7)
         ent[i] = float(-(p * np.log(p) + (1 - p) * np.log1p(-p)).mean())
     order = np.argsort(ent)[::-1]
     top = order[:k]
-    rest = np.setdiff1d(np.arange(prob.shape[0]), top)
+    rest = np.setdiff1d(np.arange(margin, prob.shape[0] - margin), top)
     rnd = np.random.default_rng(seed).choice(rest, size=min(k, rest.size), replace=False)
     return sorted(int(i) for i in top), sorted(int(i) for i in rnd)
 
@@ -172,7 +175,7 @@ def check(args):
         print(f"{r['signal']:15s} {r['direction']:5s} {r['value']:9.3g} {fmt(r['warn'])} {fmt(r['alert'])}  {r['level']}")
     print(f"STATUS: {status}")
 
-    top, rnd = spot_check(new, args.spot_check, args.seed) if args.spot_check else ([], [])
+    top, rnd = spot_check(new, args.spot_check, args.seed, args.spot_margin) if args.spot_check else ([], [])
     name = (lambda i: il_numbers[i]) if il_numbers and len(il_numbers) == new.shape[0] else (lambda i: i)
     if top:
         print(f"spot checks for an interpreter: highest entropy {[name(i) for i in top]}, "
@@ -209,6 +212,8 @@ def main():
     k.add_argument("--crop"); k.add_argument("--meta")
     k.add_argument("--il-range", type=int, nargs=2); k.add_argument("--xl-range", type=int, nargs=2)
     k.add_argument("--spot-check", type=int, default=5)
+    k.add_argument("--spot-margin", type=int, default=8,
+                   help="inlines skipped at each end of the crop when choosing spot checks")
     k.add_argument("--seed", type=int, default=0)
     k.add_argument("--out")
     k.add_argument("--master", default="local[*]")
