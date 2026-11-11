@@ -101,7 +101,7 @@ Nine perturbed copies of the F3 crop, each run through FaultSeg3D and scored aga
 | Time gain t¹ | 0.550 | 0.545 | 0.523 | 0.0315 | −2.7 Hz | 5.88 / 0.52 |
 | Time gain t² | 0.487 | 0.465 | 0.402 | 0.0261 | −4.1 Hz | 8.28 / 0.99 |
 
-Spearman correlation of each signal's size with the F1 drop at 0.97 (10 surveys): mean probability and fraction > 0.5 **+0.78**, entropy +0.74, fragmentation +0.60, centroid +0.47, normalized RMS PSI +0.41, dominant frequency +0.30, raw RMS PSI +0.25.
+Spearman correlation of each signal's size with the F1 drop at 0.97 (10 surveys, output signals from every inline): fragmentation **+0.91**, mean probability and fraction > 0.5 **+0.83**, entropy +0.76, centroid +0.47, normalized RMS PSI +0.41, dominant frequency +0.30, raw RMS PSI +0.25.
 
 Findings:
 - **Gain is a pure false alarm for input monitoring.** Raw RMS PSI hits its ceiling (8.28) and F1 is identical to four decimals, because the model normalizes each crop.
@@ -109,8 +109,22 @@ Findings:
 - **Under noise the model goes quiet.** At the deployed threshold recall falls 0.57 → 0.05 while precision falls more slowly. Best-threshold F1 hides part of this: the best threshold moved from 0.97 to 0.01.
 - **The model's own output is the best monitor.** When the fraction of voxels above 0.5 fell (noise, time gain), F1 fell in the same order: −8% → 0.02, −17% → 0.08, −24% → 0.10, −39% → 0.32, −58% → 0.48. When it rose (low-pass), F1 fell much less.
 - **Direction matters for spectral shift**: a centroid rise tracked harm; a much larger fall mostly did not.
+- **Noise fragments the predicted faults**: connected pieces per 1,000 fault pixels rose by 0.8, 2.2 and 3.5 with the three noise levels, and fell under low-pass and time gain. This signal is sensitive to sampling: computed on every 4th inline it showed almost nothing (see limits).
 
-Limits: 10 surveys, so the correlations are rough rankings (two surveys have zero drop and zero output shift, which lifts every output signal). Drops under about 0.1 are inside the bootstrap intervals. The perturbations keep the geology fixed; on a new area the fraction of predicted faults also changes for geological reasons, so the reference for that signal has to come from comparable data. The relation between predicted fraction and F1 was read from this table after the fact, not predicted.
+### Monitoring thresholds calibrated from the study
+
+`monitoring/monitor_batch.py calibrate` sets a threshold at the midpoint of the gap between surveys that lost at least 0.05 F1 (WARN) or 0.15 F1 (ALERT) and those that did not. Signals whose harmed and unharmed surveys interleave are reported as context and never alert (`monitoring/thresholds_f3.json`).
+
+| Signal | Direction | WARN | ALERT |
+|---|---|---|---|
+| Predicted fault fraction | Fall | 12.5% | 31.5% |
+| Predicted fault fraction | Rise | 52.3% | none (no rise lost 0.15 F1) |
+| Spectral centroid | Rise | 2.7 Hz | 7.6 Hz |
+| Spectral centroid fall; RMS PSI raw and normalized | | context only | |
+
+`check` on three study surveys: gain ×4 → OK (raw PSI 8.28 shown as context), noise 0.5 → ALERT on both rules (−39.3%, +9.8 Hz), low-pass 40 Hz → OK. These are the surveys the thresholds came from, so this shows the tool reports what the study found; it is not an independent validation.
+
+Limits: 10 surveys, so the correlations are rough rankings (two surveys have zero drop and zero output shift, which lifts every output signal). Drops under about 0.1 are inside the bootstrap intervals. The perturbations keep the geology fixed; on a new area the fraction of predicted faults also changes for geological reasons, so the reference for that signal has to come from comparable data. The relation between predicted fraction and F1 was read from this table after the fact, not predicted. Output signals computed on every 4th inline differed from the whole crop (predicted fraction about 14% higher, fragmentation changes several times smaller); the cause has not been investigated, and all figures here use every inline.
 
 ## Quick start (local, no cluster)
 

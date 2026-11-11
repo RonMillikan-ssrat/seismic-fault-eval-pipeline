@@ -1,0 +1,62 @@
+{
+ "reference": "F3",
+ "drop_column": "f1_fixed_drop",
+ "warn_drop": 0.05,
+ "alert_drop": 0.15,
+ "n_surveys": 10,
+ "surveys": [
+  "F3",
+  "F3-noise-0.25",
+  "F3-noise-0.5",
+  "F3-noise-1",
+  "F3-lowpass-40",
+  "F3-lowpass-25",
+  "F3-lowpass-15",
+  "F3-gain-4",
+  "F3-tgain-1",
+  "F3-tgain-2"
+ ],
+ "rules": [
+  {
+   "signal": "frac_pos_pct",
+   "direction": "fall",
+   "warn": 12.4627,
+   "alert": 31.5341,
+   "alert_note": null,
+   "n_surveys": 7
+  },
+  {
+   "signal": "frac_pos_pct",
+   "direction": "rise",
+   "warn": 52.3114,
+   "alert": null,
+   "alert_note": "no survey moving this way lost 0.15 F1 or more",
+   "n_surveys": 5
+  },
+  {
+   "signal": "d_centroid_hz",
+   "direction": "rise",
+   "warn": 2.6832,
+   "alert": 7.5716,
+   "alert_note": null,
+   "n_surveys": 5
+  }
+ ],
+ "context_only": [
+  {
+   "signal": "d_centroid_hz",
+   "direction": "fall",
+   "reason": "not separable at a drop of 0.05: an unharmed survey reads 22, a harmed one 4.09"
+  },
+  {
+   "signal": "psi_rms_norm",
+   "direction": "rise",
+   "reason": "not separable at a drop of 0.05: an unharmed survey reads 0.658, a harmed one 0.00153"
+  },
+  {
+   "signal": "psi_rms_raw",
+   "direction": "rise",
+   "reason": "not separable at a drop of 0.05: an unharmed survey reads 8.28, a harmed one 0.353"
+  }
+ ]
+}
