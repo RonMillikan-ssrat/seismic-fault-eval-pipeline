@@ -70,7 +70,7 @@ def main():
           f"{job.name}?project={args.project}")
     if args.wait:
         job.wait()
-        print(f"final state: {job.state}")
+        print(f"final state: {job.state.name}")
 
 
 if __name__ == "__main__":
