@@ -177,6 +177,33 @@ Limits: 10 surveys, so the correlations are rough rankings (two surveys have zer
 - A large-scale benchmark on geological fault delineation models, arXiv 2505.08585.
 - F3 Demo survey, provided by dGB Earth Sciences through the OpendTect Open Seismic Repository.
 
+## Tests
+
+The known-answer checks in the Components table run under pytest. Each synthetic lake
+is built once per session and shared by the tests that need it.
+
+```bash
+pip install -r requirements-test.txt            # add requirements-spark.txt (+ Java 21) for the Spark tests
+pytest -m "not spark"                           # metrics, baseline, gate, monitoring rules: ~5 s
+pytest                                          # everything, including the Spark lakes: ~5-6 min
+pytest --bq-project <project>                   # also the BigQuery QC tests (after gcp/load_bq.sh)
+```
+
+| File | Covers | Needs |
+|---|---|---|
+| `tests/test_metrics.py` | `evaluation/fault_metrics.py`: tolerance matching, Dice, AP, label regions, histogram sweep, bootstraps, thinning | NumPy, SciPy |
+| `tests/test_baseline.py` | `baseline/coherence.py` (exact semblance values, lake loader), `evaluation/compare_models.py` gate both ways | + pyarrow |
+| `tests/test_monitor.py` | `monitoring/monitor_batch.py`: threshold calibration, evaluate, spot checks; `check` on a lake | rules: pandas; `check`: Spark |
+| `tests/test_drift.py` | `monitoring/drift_signals.py`: PSI, spectral centroid, entropy, fragmentation, analysis | Spark (output signals: NumPy) |
+| `tests/test_roundtrip.py` | `spark/segy_to_parquet.py` on IBM and IEEE SEG-Y | Spark |
+| `tests/test_qc.py` | `sql/*.sql` (and `sql/bq/*.sql` with `--bq-project`) against planted problems | Spark (+ BigQuery) |
+| `tests/test_perturb.py` | `spark/perturb.py`: gain, tgain, noise, low-pass, catalog tables | Spark |
+| `tests/test_pipeline_compile.py` | both KFP pipelines compile | kfp |
+
+Tests that need Spark carry the `spark` marker and are skipped, with the reason, when PySpark
+or Java is missing. `tests/check_roundtrip.py` and `tests/check_qc.py` remain as command-line
+tools for real or BigQuery data (below); pytest imports the same comparison code from them.
+
 ## Quick start (local, no cluster)
 
 ```bash
@@ -207,9 +234,7 @@ python tests/check_qc.py /tmp/qc.sgy.truth.npz --engine bq --survey QC
 
 # Fault metrics (no Spark needed)
 pip install -r requirements-eval.txt
-python tests/check_metrics.py
 python evaluation/fault_metrics.py --prob prob.npy --label label.npy --tol 2 --block 10
-python tests/check_baseline.py
 
 # F3: lake -> coherence baseline -> score both -> gate
 # (F3 files come from seismic-fault-labeling: F3.sgy, inlines/, pred/)

@@ -1,0 +1,8 @@
+# Test suite (pytest). Fast tests need only requirements-eval.txt; the tests marked
+# "spark" also need requirements-spark.txt and Java 17/21, and are skipped without them.
+# The pipeline-compile tests need kfp (requirements-pipeline.txt) and are skipped without it.
+-r requirements-eval.txt
+pytest>=8
+pyarrow>=15
+pandas>=2.2,<3
+matplotlib>=3.8
